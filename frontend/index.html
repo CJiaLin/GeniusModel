@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GeniusModel Studio</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>GeniusModel Studio</h1>
+      <p>前后端分离 Demo（LLM + OpenEvolve 接入预留）</p>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>1) 创建项目</h2>
+        <form id="project-form">
+          <input name="name" placeholder="项目名" value="反欺诈冷启动" required />
+          <select name="scene">
+            <option value="fraud">反欺诈</option>
+            <option value="marketing">营销</option>
+            <option value="custom">自定义</option>
+          </select>
+          <select name="task_type">
+            <option value="classification">分类</option>
+            <option value="regression">回归</option>
+            <option value="timeseries">时间序列</option>
+          </select>
+          <input name="label_column" placeholder="标签字段" value="is_fraud" required />
+          <button type="submit">创建</button>
+        </form>
+        <pre id="project-result"></pre>
+      </section>
+
+      <section class="card">
+        <h2>2) 发起演化运行</h2>
+        <form id="run-form">
+          <input name="project_id" placeholder="project_id" required />
+          <input name="optimize_target" value="AUC" />
+          <input name="generations" type="number" value="20" min="1" max="200" />
+          <input name="budget_minutes" type="number" value="30" min="1" max="600" />
+          <button type="submit">运行</button>
+        </form>
+        <pre id="run-result"></pre>
+      </section>
+
+      <section class="card">
+        <h2>3) 查询报告</h2>
+        <form id="report-form">
+          <input name="run_id" placeholder="run_id" required />
+          <button type="submit">查看报告</button>
+        </form>
+        <pre id="report-result"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
