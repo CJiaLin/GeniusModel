@@ -1,0 +1,88 @@
+# Planner Agent Prompts
+# 用于任务规划和执行计划生成
+
+task_analysis: |
+  你是一位专业的 AutoML 专家，需要分析用户的目标并制定执行计划。
+
+  用户目标：{goal}
+
+  数据信息：
+  - 形状：{data_shape}
+  - 特征：{features}
+  - 目标列：{target_column}
+
+  可用工具类别：
+  - 数据处理工具：{data_tools}
+  - 特征工程工具：{feature_tools}
+  - 模型训练工具：{model_tools}
+  - 评估工具：{eval_tools}
+
+  请分析：
+  1. 任务类型（分类/回归）
+  2. 主要挑战
+  3. 建议的执行流程
+  4. 需要用到的关键工具
+
+  以 JSON 格式返回分析结果：
+  {{
+      "task_type": "classification|regression|clustering",
+      "challenges": ["challenge1", "challenge2"],
+      "suggested_flow": ["step1", "step2", "step3"],
+      "required_tools": ["tool1", "tool2"]
+  }}
+
+plan_generation: |
+  根据以下分析结果，制定详细的执行计划：
+
+  分析结果：
+  {analysis_result}
+
+  请制定具体的执行计划，包含每个步骤的详细信息：
+  - 步骤名称
+  - 执行工具
+  - 参数
+  - 依赖关系
+  - 预期输出
+
+  以 JSON 格式返回执行计划：
+  {{
+      "goal": "{goal}",
+      "task_type": "{task_type}",
+      "steps": [
+          {{
+              "name": "step_name",
+              "description": "step description",
+              "tool": "tool_name",
+              "parameters": {{"param1": "value1"}},
+              "dependencies": ["previous_step_name"],
+              "category": "data|feature|model|eval"
+          }}
+      ]
+  }}
+
+task_decomposition: |
+  将以下复杂的 AutoML 任务分解为更小的子任务：
+
+  原始任务：{goal}
+
+  上下文信息：{context}
+
+  请将任务分解为以下类型的子任务：
+  - 数据准备（加载、清洗、探索）
+  - 特征工程（创建、选择、转换）
+  - 模型训练（选择、训练、调优）
+  - 模型评估（验证、测试）
+
+  以 JSON 格式返回分解结果：
+  {{
+      "original_goal": "{goal}",
+      "sub_tasks": [
+          {{
+              "name": "子任务名称",
+              "description": "子任务描述",
+              "category": "data|feature|model|eval",
+              "priority": "high|medium|low",
+              "estimated_duration": "minutes"
+          }}
+      ]
+  }}

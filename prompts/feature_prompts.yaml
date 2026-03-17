@@ -1,0 +1,113 @@
+# Feature Engineer Agent Prompts
+# 用于特征工程相关的 LLM 调用
+
+feature_suggestion_generation: |
+  你是一位资深的数据科学家和特征工程专家。请分析以下数据集的场景和特征，
+  自主思考并生成适合的特征工程建议。
+
+  ## 建模场景
+  - 任务类型：{task_type}
+  - 目标变量：{target_column}
+  - 业务描述：{business_description}
+
+  ## 数据概览
+  - 数据形状：{data_shape}行 x {data_columns}列
+  - 数值特征 ({len_numeric_cols}个):
+  {numeric_details}
+  - 类别特征 ({len_categorical_cols}个):
+  {categorical_details}
+
+  ## 你的任务
+  请生成{n_suggestions}个特征工程建议。对于每个建议，请提供：
+  1. 特征名称 (name): 简洁明了的特征名
+  2. 特征描述 (description): 说明这个特征是什么以及为什么有用
+  3. 生成代码 (code): 完整的 Python 代码，使用 pandas 实现
+  4. 特征类别 (category): 特征类型（交互特征、聚合特征、统计特征、领域特征、时间特征、文本特征等）
+  5. 推理过程 (reasoning): 你为什么认为这个特征有价值
+
+  ## 输出格式
+  请按以下 JSON 格式输出（不要有其他内容）：
+  [
+    {{
+      "name": "特征名称",
+      "description": "特征描述",
+      "code": "pandas 代码",
+      "category": "特征类别",
+      "reasoning": "推理过程"
+    }},
+    ...
+  ]
+
+  请确保：
+  1. 代码可以直接运行，使用 df 作为 DataFrame 变量名
+  2. 代码最后将新特征赋值给 df，例如：df['new_feature'] = ...
+  3. 考虑特征的实际价值，优先选择对预测目标有帮助的特征
+  4. 代码要处理可能的缺失值和异常值
+
+feature_direction_generation: |
+  你是一位资深的数据科学家和特征工程专家。请分析以下数据集的场景，
+  为特征工程提供几个可能的方向建议。
+
+  ## 建模场景
+  - 任务类型：{task_type}
+  - 目标变量：{target_column}
+  - 业务描述：{business_description}
+
+  ## 数据概览
+  - 数值特征：{numeric_cols}
+  - 类别特征：{categorical_cols}
+
+  ## 你的任务
+  请根据已有的数据生成{n_directions}个特征工程方向。对于每个方向，请提供：
+  1. 方向名称 (direction_name): 简洁的方向名
+  2. 方向描述 (description): 为什么要做这个方向，有什么价值
+  3. 特征类别 (category): 时间特征/统计特征/交叉特征/领域特征/变换特征等
+  4. 建议的具体特征列表 (suggested_features): 建议生成哪些具体特征（列出 3-5 个特征名和物理意义）
+
+  ## 输出格式
+  请按以下 JSON 格式输出（不要有其他内容）：
+  [
+    {{
+      "direction_name": "方向名称",
+      "description": "方向描述",
+      "category": "特征类别",
+      "suggested_features": [
+        {{"name": "特征名", "meaning": "物理意义"}},
+        ...
+      ]
+    }},
+    ...
+  ]
+
+code_generation_from_directions: |
+  你是一位数据科学家。请根据以下特征方向，生成具体的特征加工代码。
+
+  ## 数据列名
+  {columns}
+
+  ## 特征方向
+  {directions}
+
+  ## 你的任务
+  请为每个方向生成具体的特征加工代码。每个特征需要：
+  1. name: 特征名称（英文变量名）
+  2. description: 特征描述（包含物理意义）
+  3. code: 完整的 Python 代码（使用 pandas）
+
+  ## 输出格式
+  请按以下 JSON 格式输出：
+  [
+    {{
+      "name": "特征名",
+      "description": "特征描述（包含物理意义）",
+      "code": "pandas 代码",
+      "category": "特征类别",
+      "reasoning": "为什么这个特征有价值"
+    }},
+    ...
+  ]
+
+  注意：
+  - 代码最后要将新特征赋值给 df: df['新特征名'] = ...
+  - 要处理可能的缺失值
+  - 特征名要简洁明了
