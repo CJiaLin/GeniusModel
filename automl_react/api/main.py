@@ -26,6 +26,7 @@ from automl_react.agents import (
     FeatureEngineeringAgent,
     ModelTrainingAgent
 )
+from automl_react.agents.data_analysis_agent import DataAnalysisAgent
 from automl_react.evaluation import ModelEvaluator
 from automl_react.report import PipelineGenerator, ReportGenerator
 from automl_react.workflow import WorkflowState, WorkflowStage
@@ -63,6 +64,7 @@ class StartWorkflowRequest(BaseModel):
     target_column: str
     task_type: str = "classification"
     model: str = "claude-sonnet-4-20250514-thinking"
+    task_description: str = ""  # 用户输入的建模背景和要求
 
 
 class UserConfirmationRequest(BaseModel):
@@ -190,6 +192,8 @@ async def start_workflow(request: StartWorkflowRequest):
     
     初始化工作流状态和相关组件
     """
+    import shutil
+    
     session = get_session(request.session_id)
     
     # 创建工作流状态
@@ -201,9 +205,19 @@ async def start_workflow(request: StartWorkflowRequest):
     workflow_state.set_context("target_column", request.target_column)
     workflow_state.set_context("task_type", request.task_type)
     workflow_state.set_context("model", request.model)
+    workflow_state.set_context("task_description", request.task_description)  # 保存用户的建模背景和要求
     
     session["workflow_state"] = workflow_state
     session["confirmation_manager"] = ConfirmationManager()
+    
+    # 将初始数据复制到 session 目录
+    asset_manager = get_asset_manager(session_id=request.session_id)
+    original_data_path = Path(request.data_path)
+    if original_data_path.exists():
+        session_data_path = asset_manager.session_dir / "data" / "original_data.csv"
+        session_data_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(original_data_path, session_data_path)
+        print(f"[API] 初始数据已复制到: {session_data_path}")
     
     # 创建 LLM 客户端
     try:
@@ -220,6 +234,10 @@ async def start_workflow(request: StartWorkflowRequest):
         )
     
     # 创建 Agents
+    session["agents"]["analysis"] = DataAnalysisAgent(
+        llm=llm,
+        session_id=request.session_id
+    )
     session["agents"]["cleaning"] = DataCleaningAgent(
         llm=llm,
         session_id=request.session_id
@@ -292,38 +310,93 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     
     # 根据阶段执行相应操作
     if stage == "data_analysis":
-        agent = session["agents"].get("automl")
-        if agent:
-            try:
-                result = agent.analyze(data_path)
-                
-                # 保存分析结果到资产
-                asset_manager = get_asset_manager(session_id=session_id)
-                asset_manager.save_data(
-                    data=str(result.get("answer", "")),
-                    filename="data_analysis_result.md",
-                    asset_type="analysis",
-                    metadata={
-                        "stage": "data_analysis",
-                        "data_path": data_path,
-                        "timestamp": datetime.now().isoformat()
-                    }
-                )
-                
-                return {
-                    "success": True,
-                    "stage": stage,
-                    "analysis": result.get("answer", ""),
-                    "requires_confirmation": False
+        agent = session["agents"].get("analysis")
+        if not agent:
+            return {"success": False, "error": "DataAnalysis Agent 未初始化"}
+        
+        try:
+            # 获取用户的建模背景和要求
+            task_description = workflow_state.get_context("task_description", "")
+            
+            print(f"[API] ========== 数据分析阶段开始 ==========")
+            print(f"[API] 调用 agent.analyze({data_path})")
+            if task_description:
+                print(f"[API] 用户建模背景: {task_description[:100]}...")
+            
+            result = agent.analyze(data_path, task_description=task_description)
+            print(f"[API] analyze 返回结果: success={result.get('success')}, answer长度={len(result.get('answer', ''))}")
+            print(f"[API] answer 内容预览: {result.get('answer', '')[:200]}...")
+            
+            # 保存分析结果到资产
+            asset_manager = get_asset_manager(session_id=session_id)
+            asset_manager.save_data(
+                data=str(result.get("answer", "")),
+                filename="data_analysis_result.md",
+                asset_type="analysis",
+                metadata={
+                    "stage": "data_analysis",
+                    "data_path": data_path,
+                    "task_description": task_description,
+                    "timestamp": datetime.now().isoformat()
                 }
-            except Exception as e:
-                return {"success": False, "error": str(e)}
+            )
+            print(f"[API] 分析结果已保存到: analysis/data_analysis_result.md")
+            print(f"[API] ========== 数据分析阶段完成 ==========")
+            
+            return {
+                "success": True,
+                "stage": stage,
+                "analysis": result.get("answer", ""),
+                "requires_confirmation": False
+            }
+        except Exception as e:
+            import traceback
+            error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            print(f"[API] 数据分析错误: {error_detail}")
+            return {"success": False, "error": error_detail}
     
     elif stage == "data_cleaning":
         agent = session["agents"].get("cleaning")
         if agent:
             try:
-                result = agent.generate_cleaning_plan(data_path)
+                print(f"[API] ========== 数据清洗阶段开始 ==========")
+                
+                # 获取用户的建模背景和要求
+                task_description = workflow_state.get_context("task_description", "")
+                if task_description:
+                    print(f"[API] 用户建模背景: {task_description[:100]}...")
+                
+                # 读取数据分析报告
+                asset_manager = get_asset_manager(session_id=session_id)
+                analysis_result = asset_manager.read_asset("analysis", "data_analysis_result.md")
+                
+                if analysis_result:
+                    print(f"[API] 成功读取数据分析报告，长度: {len(analysis_result)} 字符")
+                    print(f"[API] 分析报告预览: {analysis_result[:200]}...")
+                else:
+                    print(f"[API] 警告: 未找到数据分析报告，将自行分析数据")
+                
+                result = agent.generate_cleaning_plan(
+                    data_path, 
+                    analysis_result=analysis_result,
+                    task_description=task_description
+                )
+                print(f"[API] 清洗方案生成完成，长度: {len(result)} 字符")
+                
+                # 保存清洗方案到 session 目录
+                asset_manager.save_data(
+                    data=result,
+                    filename="cleaning_plan.md",
+                    asset_type="cleaning",
+                    metadata={
+                        "stage": "data_cleaning",
+                        "data_path": data_path,
+                        "has_analysis_input": analysis_result is not None,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+                print(f"[API] 清洗方案已保存到: cleaning/cleaning_plan.md")
+                print(f"[API] ========== 数据清洗阶段完成 ==========")
                 
                 # 创建确认点
                 confirmation_point = confirmation_manager.add_confirmation_point(
@@ -345,7 +418,57 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
         agent = session["agents"].get("feature")
         if agent:
             try:
-                result = agent.generate_feature_plan(data_path, target_column, task_type)
+                print(f"[API] ========== 特征工程阶段开始 ==========")
+                
+                # 获取用户的建模背景和要求
+                task_description = workflow_state.get_context("task_description", "")
+                if task_description:
+                    print(f"[API] 用户建模背景: {task_description[:100]}...")
+                
+                # 读取前一阶段的结果
+                asset_manager = get_asset_manager(session_id=session_id)
+                analysis_result = asset_manager.read_asset("analysis", "data_analysis_result.md")
+                cleaning_result = asset_manager.read_asset("cleaning", "cleaning_plan.md")
+                
+                # 读取清洗后的数据路径
+                import json
+                cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
+                cleaned_data_path = None
+                if cleaning_result_json:
+                    try:
+                        cleaning_data = json.loads(cleaning_result_json)
+                        cleaned_data_path = cleaning_data.get("cleaned_data_path")
+                        if cleaned_data_path:
+                            print(f"[API] 使用清洗后的数据: {cleaned_data_path}")
+                    except:
+                        pass
+                
+                result = agent.generate_feature_plan(
+                    data_path, 
+                    target_column, 
+                    task_type,
+                    analysis_result=analysis_result,
+                    cleaning_result=cleaning_result,
+                    cleaned_data_path=cleaned_data_path,
+                    task_description=task_description
+                )
+                print(f"[API] 特征工程方案生成完成，长度: {len(result)} 字符")
+                
+                # 保存特征工程方案到资产
+                asset_manager.save_data(
+                    data=result,
+                    filename="feature_engineering_plan.md",
+                    asset_type="features",
+                    metadata={
+                        "stage": "feature_engineering",
+                        "data_path": data_path,
+                        "has_analysis_input": analysis_result is not None,
+                        "has_cleaning_input": cleaning_result is not None,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+                print(f"[API] 特征工程方案已保存到: features/feature_engineering_plan.md")
+                print(f"[API] ========== 特征工程阶段完成 ==========")
                 
                 # 创建确认点
                 confirmation_point = confirmation_manager.add_confirmation_point(
@@ -367,7 +490,60 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
         agent = session["agents"].get("model")
         if agent:
             try:
-                result = agent.generate_model_plan(data_path, target_column, task_type)
+                print(f"[API] ========== 模型训练阶段开始 ==========")
+                
+                # 获取用户的建模背景和要求
+                task_description = workflow_state.get_context("task_description", "")
+                if task_description:
+                    print(f"[API] 用户建模背景: {task_description[:100]}...")
+                
+                # 读取所有前一阶段的结果
+                asset_manager = get_asset_manager(session_id=session_id)
+                analysis_result = asset_manager.read_asset("analysis", "data_analysis_result.md")
+                cleaning_result = asset_manager.read_asset("cleaning", "cleaning_plan.md")
+                feature_result = asset_manager.read_asset("features", "feature_engineering_plan.md")
+                
+                # 读取特征工程后的数据路径
+                import json
+                feature_result_json = asset_manager.read_asset("features", "feature_engineering_result.json")
+                features_data_path = None
+                if feature_result_json:
+                    try:
+                        feature_data = json.loads(feature_result_json)
+                        features_data_path = feature_data.get("features_data_path")
+                        if features_data_path:
+                            print(f"[API] 使用特征工程后的数据: {features_data_path}")
+                    except:
+                        pass
+                
+                result = agent.generate_model_plan(
+                    data_path, 
+                    target_column, 
+                    task_type,
+                    analysis_result=analysis_result,
+                    cleaning_result=cleaning_result,
+                    feature_result=feature_result,
+                    features_data_path=features_data_path,
+                    task_description=task_description
+                )
+                print(f"[API] 模型训练方案生成完成，长度: {len(result)} 字符")
+                
+                # 保存模型训练方案到资产
+                asset_manager.save_data(
+                    data=result,
+                    filename="model_training_plan.md",
+                    asset_type="models",
+                    metadata={
+                        "stage": "model_training",
+                        "data_path": data_path,
+                        "has_analysis_input": analysis_result is not None,
+                        "has_cleaning_input": cleaning_result is not None,
+                        "has_feature_input": feature_result is not None,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+                print(f"[API] 模型训练方案已保存到: models/model_training_plan.md")
+                print(f"[API] ========== 模型训练阶段完成 ==========")
 
                 # 创建确认点
                 confirmation_point = confirmation_manager.add_confirmation_point(
@@ -485,19 +661,60 @@ async def submit_confirmation(request: UserConfirmationRequest):
 
 async def execute_data_cleaning(session: Dict, data_path: str, modifications: Optional[str] = None) -> Dict:
     """执行数据清洗"""
+    import shutil
+    
+    print(f"[API] ========== 开始执行数据清洗 ==========")
+    print(f"[API] 数据路径: {data_path}")
+    
     agent = session["agents"].get("cleaning")
     if not agent:
         raise ValueError("数据清洗 Agent 不存在")
 
+    session_id = session.get("session_id", "default")
+    asset_manager = get_asset_manager(session_id=session_id)
+
     # 先生成清洗方案（如果还没有）
     if not agent.cleaning_plan:
+        print(f"[API] 清洗方案未生成，开始生成...")
         agent.generate_cleaning_plan(data_path)
+    else:
+        print(f"[API] 清洗方案已存在，长度: {len(agent.cleaning_plan)} 字符")
 
-    # 生成清洗代码并执行（新方法会自动验证和执行）
-    code = agent.generate_cleaning_code(modifications)
+    # 生成清洗代码
+    print(f"[API] 开始生成清洗代码...")
+    try:
+        code = agent.generate_cleaning_code(modifications)
+        print(f"[API] 清洗代码生成完成，长度: {len(code) if code else 0} 字符")
+    except Exception as e:
+        print(f"[API] 清洗代码生成失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
 
     # 执行代码
-    result = agent.execute_cleaning(code)
+    print(f"[API] 开始执行清洗代码...")
+    try:
+        result = agent.execute_cleaning(code)
+        print(f"[API] 清洗代码执行完成，结果: {result.get('success')}")
+    except Exception as e:
+        print(f"[API] 清洗代码执行失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+    # 如果清洗成功，将清洗后的数据复制到 session 目录
+    if result.get("success") and result.get("cleaned_data_path"):
+        cleaned_path = Path(result["cleaned_data_path"])
+        if cleaned_path.exists():
+            session_cleaned_path = asset_manager.session_dir / "data" / "cleaned_data.csv"
+            session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(cleaned_path, session_cleaned_path)
+            print(f"[API] 清洗后数据已复制到: {session_cleaned_path}")
+            result["cleaned_data_path"] = str(session_cleaned_path)
+        else:
+            print(f"[API] 警告: 清洗后的数据文件不存在: {cleaned_path}")
+    else:
+        print(f"[API] 警告: 清洗未成功或未生成清洗后的数据")
 
     # 构建执行结果
     execution_result = {
@@ -509,13 +726,14 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
     }
 
     # 保存结果到资产（用于报告生成）
-    asset_manager = get_asset_manager(session_id=session.get("session_id", "default"))
     asset_manager.save_data(
         data=json.dumps(execution_result, ensure_ascii=False, indent=2),
         filename="cleaning_result.json",
-        asset_type="cleaned_data",
+        asset_type="cleaning",
         metadata=execution_result
     )
+    
+    print(f"[API] ========== 数据清洗执行完成 ==========")
 
     return execution_result
 
@@ -528,19 +746,60 @@ async def execute_feature_engineering(
     modifications: Optional[str] = None
 ) -> Dict:
     """执行特征工程"""
+    import shutil
+    
+    print(f"[API] ========== 开始执行特征工程 ==========")
+    print(f"[API] 数据路径: {data_path}")
+    
     agent = session["agents"].get("feature")
     if not agent:
         raise ValueError("特征工程 Agent 不存在")
 
+    session_id = session.get("session_id", "default")
+    asset_manager = get_asset_manager(session_id=session_id)
+
     # 先生成特征工程方案（如果还没有）
     if not agent.feature_plan:
+        print(f"[API] 特征工程方案未生成，开始生成...")
         agent.generate_feature_plan(data_path, target_column, task_type)
+    else:
+        print(f"[API] 特征工程方案已存在，长度: {len(agent.feature_plan)} 字符")
 
-    # 生成特征工程代码并执行
-    code = agent.generate_feature_code(modifications)
+    # 生成特征工程代码
+    print(f"[API] 开始生成特征工程代码...")
+    try:
+        code = agent.generate_feature_code(modifications)
+        print(f"[API] 特征工程代码生成完成，长度: {len(code) if code else 0} 字符")
+    except Exception as e:
+        print(f"[API] 特征工程代码生成失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
 
     # 执行代码
-    result = agent.execute_feature_engineering(code)
+    print(f"[API] 开始执行特征工程代码...")
+    try:
+        result = agent.execute_feature_engineering(code)
+        print(f"[API] 特征工程代码执行完成，结果: {result.get('success')}")
+    except Exception as e:
+        print(f"[API] 特征工程代码执行失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+    # 如果特征工程成功，将特征工程后的数据复制到 session 目录
+    if result.get("success") and result.get("features_data_path"):
+        features_path = Path(result["features_data_path"])
+        if features_path.exists():
+            session_features_path = asset_manager.session_dir / "data" / "features_data.csv"
+            session_features_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(features_path, session_features_path)
+            print(f"[API] 特征工程后数据已复制到: {session_features_path}")
+            result["features_data_path"] = str(session_features_path)
+        else:
+            print(f"[API] 警告: 特征工程后的数据文件不存在: {features_path}")
+    else:
+        print(f"[API] 警告: 特征工程未成功或未生成特征工程后的数据")
 
     # 构建执行结果
     execution_result = {
@@ -552,13 +811,14 @@ async def execute_feature_engineering(
     }
 
     # 保存结果到资产（用于报告生成）
-    asset_manager = get_asset_manager(session_id=session.get("session_id", "default"))
     asset_manager.save_data(
         data=json.dumps(execution_result, ensure_ascii=False, indent=2),
         filename="feature_engineering_result.json",
         asset_type="features",
         metadata=execution_result
     )
+    
+    print(f"[API] ========== 特征工程执行完成 ==========")
 
     return execution_result
 

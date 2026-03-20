@@ -5,6 +5,7 @@
 
 import requests
 import json
+import time
 
 BASE_URL = "http://localhost:8000"
 TRAIN_DATA_PATH = "/Users/cjialin/code/AutoMLByLLM/train.csv"
@@ -17,11 +18,14 @@ def test_data_analysis():
     
     # 1. 启动工作流
     print("\n1. 启动工作流...")
+    session_id = f"test_analysis_{int(time.time())}"
     url = f"{BASE_URL}/workflow/start"
     data = {
+        "session_id": session_id,
         "data_path": TRAIN_DATA_PATH,
         "target_column": "SalePrice",
-        "task_type": "regression"
+        "task_type": "regression",
+        "model": "kimi-k2.5"  # 使用配置文件中的模型
     }
     response = requests.post(url, json=data)
     

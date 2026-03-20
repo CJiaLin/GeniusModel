@@ -99,7 +99,12 @@ class ModelTrainingAgent(ReActAgent):
         self,
         data_path: str = None,
         target_column: str = None,
-        task_type: str = "classification"
+        task_type: str = "classification",
+        analysis_result: str = None,
+        cleaning_result: str = None,
+        feature_result: str = None,
+        features_data_path: str = None,
+        task_description: str = ""
     ) -> str:
         """
         生成建模方案
@@ -108,11 +113,17 @@ class ModelTrainingAgent(ReActAgent):
             data_path: 数据文件路径
             target_column: 目标列名
             task_type: 任务类型
+            analysis_result: 数据分析报告（可选）
+            cleaning_result: 数据清洗报告（可选）
+            feature_result: 特征工程报告（可选）
+            features_data_path: 特征工程后的数据路径（可选，如果提供则使用此路径）
+            task_description: 用户的建模背景和要求
 
         Returns:
             建模方案（Markdown 格式）
         """
-        path = data_path or self.data_path
+        # 优先使用特征工程后的数据路径
+        path = features_data_path or data_path or self.data_path
         target = target_column or self.target_column
         task = task_type or self.task_type
 
@@ -123,7 +134,45 @@ class ModelTrainingAgent(ReActAgent):
         self.target_column = target
         self.task_type = task
 
-        # 首先加载并分析实际数据
+        # 构建上下文摘要
+        context_summary = ""
+        
+        # 添加用户的建模背景
+        if task_description:
+            context_summary += f"""
+## 用户建模背景和要求
+
+{task_description}
+
+**重要：请在建模方案中充分考虑用户的建模背景和要求。**
+
+"""
+        
+        if analysis_result:
+            context_summary += f"""
+## 数据分析报告（来自数据分析阶段）
+
+{analysis_result[:2000]}
+
+"""
+        
+        if cleaning_result:
+            context_summary += f"""
+## 数据清洗报告（来自数据清洗阶段）
+
+{cleaning_result[:2000]}
+
+"""
+        
+        if feature_result:
+            context_summary += f"""
+## 特征工程报告（来自特征工程阶段）
+
+{feature_result[:2000]}
+
+"""
+
+        # 加载并分析实际数据
         import pandas as pd
 
         try:
@@ -142,9 +191,10 @@ class ModelTrainingAgent(ReActAgent):
 
             # 构建数据摘要
             data_summary = f"""
-## 数据基本信息
+{context_summary}
+## 当前数据基本信息
 
-- **文件路径**: {path}
+- **数据路径**: {path}
 - **数据形状**: {self.data_info['shape'][0]} 行 × {self.data_info['shape'][1]} 列
 - **目标列**: {target}
 - **目标列类型**: {self.data_info['target_dtype']}
@@ -161,7 +211,7 @@ class ModelTrainingAgent(ReActAgent):
 
 {', '.join(self.data_info['categorical_columns'][:20])}
 
-重要：请基于上述实际数据生成建模方案。
+重要：请基于上述实际数据和前序阶段的分析结果生成建模方案。
 """
 
         except Exception as e:

@@ -89,12 +89,14 @@ class DataCleaningAgent(ReActAgent):
 
         return result
 
-    def generate_cleaning_plan(self, data_path: str = None) -> str:
+    def generate_cleaning_plan(self, data_path: str = None, analysis_result: str = None, task_description: str = "") -> str:
         """
         生成数据清洗思路
 
         Args:
             data_path: 数据文件路径
+            analysis_result: 数据分析报告（可选，如果提供则直接使用）
+            task_description: 用户的建模背景和要求
 
         Returns:
             清洗方案（Markdown 格式）
@@ -105,38 +107,54 @@ class DataCleaningAgent(ReActAgent):
 
         self.data_path = path
 
-        # 首先加载并分析实际数据
-        import pandas as pd
-        import os
-
-        try:
-            df = pd.read_csv(path)
-
-            # 收集数据基本信息
-            data_info = {
-                "shape": df.shape,
-                "columns": list(df.columns),
-                "dtypes": df.dtypes.astype(str).to_dict(),
-                "missing_values": df.isnull().sum().to_dict(),
-                "missing_ratio": (df.isnull().sum() / len(df) * 100).to_dict(),
-                "numeric_columns": list(df.select_dtypes(include=['int64', 'float64']).columns),
-                "categorical_columns": list(df.select_dtypes(include=['object']).columns),
-                "duplicate_rows": df.duplicated().sum(),
-                "sample_data": df.head(3).to_dict()
-            }
-
-            # 找出缺失值最多的列
-            missing_sorted = sorted(
-                [(k, v) for k, v in data_info["missing_values"].items() if v > 0],
-                key=lambda x: x[1],
-                reverse=True
-            )[:10]
-
-            # 找出数值列的统计信息
-            numeric_stats = df.describe().to_dict() if data_info["numeric_columns"] else {}
-
-            # 构建数据摘要
+        # 如果有分析报告，直接使用，不重复分析
+        if analysis_result:
             data_summary = f"""
+## 数据分析报告（来自上一阶段）
+
+{analysis_result}
+
+---
+**请基于以上分析报告，直接生成数据清洗方案，不要重复分析数据质量问题。**
+
+方案应包括：
+1. 针对分析报告中识别的问题，制定具体的清洗策略
+2. 每个清洗步骤的具体操作方法
+3. 预期效果
+"""
+        else:
+            # 没有分析报告，自行分析数据
+            import pandas as pd
+            import os
+
+            try:
+                df = pd.read_csv(path)
+
+                # 收集数据基本信息
+                data_info = {
+                    "shape": df.shape,
+                    "columns": list(df.columns),
+                    "dtypes": df.dtypes.astype(str).to_dict(),
+                    "missing_values": df.isnull().sum().to_dict(),
+                    "missing_ratio": (df.isnull().sum() / len(df) * 100).to_dict(),
+                    "numeric_columns": list(df.select_dtypes(include=['int64', 'float64']).columns),
+                    "categorical_columns": list(df.select_dtypes(include=['object']).columns),
+                    "duplicate_rows": df.duplicated().sum(),
+                    "sample_data": df.head(3).to_dict()
+                }
+
+                # 找出缺失值最多的列
+                missing_sorted = sorted(
+                    [(k, v) for k, v in data_info["missing_values"].items() if v > 0],
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:10]
+
+                # 找出数值列的统计信息
+                numeric_stats = df.describe().to_dict() if data_info["numeric_columns"] else {}
+
+                # 构建数据摘要
+                data_summary = f"""
 ## 数据基本信息
 
 - **文件路径**: {path}
@@ -148,14 +166,14 @@ class DataCleaningAgent(ReActAgent):
 ## 缺失值情况 (Top 10)
 
 """
-            for col, missing in missing_sorted:
-                ratio = data_info["missing_ratio"][col]
-                data_summary += f"- **{col}**: {missing} 个缺失 ({ratio:.1f}%)\n"
+                for col, missing in missing_sorted:
+                    ratio = data_info["missing_ratio"][col]
+                    data_summary += f"- **{col}**: {missing} 个缺失 ({ratio:.1f}%)\n"
 
-            if not missing_sorted:
-                data_summary += "- 无缺失值\n"
+                if not missing_sorted:
+                    data_summary += "- 无缺失值\n"
 
-            data_summary += f"""
+                data_summary += f"""
 ## 数值列统计
 
 主要数值列: {', '.join(data_info['numeric_columns'][:10])}
@@ -169,10 +187,10 @@ class DataCleaningAgent(ReActAgent):
 列名: {', '.join(data_info['columns'][:10])}...
 """
 
-            self.data_info = data_info
+                self.data_info = data_info
 
-        except Exception as e:
-            data_summary = f"无法加载数据文件: {path}\n错误: {str(e)}"
+            except Exception as e:
+                data_summary = f"无法加载数据文件: {path}\n错误: {str(e)}"
 
         # 加载 data-analysis skill
         techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
@@ -182,9 +200,31 @@ class DataCleaningAgent(ReActAgent):
         try:
             prompt_template = self.config_loader.get_prompt("data_cleaning", "plan_generation")
         except KeyError:
-            prompt_template = """请为以下数据生成详细的清洗方案：
+            if analysis_result:
+                # 有分析报告时，直接基于报告生成清洗方案
+                prompt_template = """你是一位数据清洗专家。以下是数据分析阶段生成的详细报告：
 
-{data_summary}
+{task_context}{data_summary}
+
+{skill_content}
+
+**重要指示**：
+1. 你必须基于上述分析报告中识别的数据质量问题，制定针对性的清洗方案
+2. 不要重复分析数据质量问题，直接给出清洗策略
+3. 清洗方案必须与上述报告中的数据特征一致（样本数、列名、缺失值情况等）
+4. 如果报告显示有 PoolQC、MiscFeature 等高缺失率列，方案中必须处理这些列
+5. 清洗方案应服务于用户的建模目标
+
+请生成 Markdown 格式的清洗方案，包括：
+1. 针对分析报告中识别的问题，制定具体的清洗策略
+2. 每个清洗步骤的具体操作方法
+3. 预期效果
+"""
+            else:
+                # 没有分析报告时，需要先分析数据
+                prompt_template = """请为以下数据生成详细的清洗方案：
+
+{task_context}{data_summary}
 
 {skill_content}
 
@@ -203,10 +243,23 @@ class DataCleaningAgent(ReActAgent):
         if pitfalls:
             skill_content += f"## 数据陷阱参考\n\n{pitfalls[:1500]}\n\n"
 
+        # 添加用户的建模背景
+        task_context = ""
+        if task_description:
+            task_context = f"""
+## 用户建模背景和要求
+
+{task_description}
+
+**重要：请在清洗方案中充分考虑用户的建模背景和要求。**
+
+"""
+
         user_input = prompt_template.format(
             data_path=path,
             data_summary=data_summary,
-            skill_content=skill_content
+            skill_content=skill_content,
+            task_context=task_context
         )
 
         # 调用 LLM 生成方案
@@ -366,6 +419,7 @@ class DataCleaningAgent(ReActAgent):
             执行结果
         """
         from ..utils.code_generator import CodeGenerator
+        import shutil
 
         cleaning_code = code or self.cleaning_code
 
@@ -375,25 +429,38 @@ class DataCleaningAgent(ReActAgent):
         # 使用代码生成器执行代码
         code_gen = CodeGenerator()
 
+        # 临时输出路径（在原始数据目录）
+        temp_cleaned_path = self.data_path.replace('.csv', '_cleaned.csv')
+
         context = {
             "data_path": self.data_path,
-            "cleaned_data_path": self.data_path.replace('.csv', '_cleaned.csv')
+            "cleaned_data_path": temp_cleaned_path
         }
 
         exec_result = code_gen.execute_code(cleaning_code, context)
 
         # 检查是否成功生成了清洗后的数据文件
         import os
-        cleaned_data_path = self.data_path.replace('.csv', '_cleaned.csv')
-        file_exists = os.path.exists(cleaned_data_path)
+        file_exists = os.path.exists(temp_cleaned_path)
+
+        # 将清洗后的数据复制到 session 目录
+        final_cleaned_path = None
+        if file_exists:
+            session_cleaned_path = self.asset_manager.session_dir / "data" / "cleaned_data.csv"
+            session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(temp_cleaned_path, session_cleaned_path)
+            final_cleaned_path = str(session_cleaned_path)
+            print(f"[Agent] 清洗后数据已复制到 session 目录: {final_cleaned_path}")
+            # 删除临时文件
+            os.remove(temp_cleaned_path)
 
         # 构建结果
         result_info = {
-            "success": exec_result.success and file_exists,
-            "cleaned_data_path": cleaned_data_path if file_exists else None,
+            "success": file_exists,  # 只要文件存在就认为成功
+            "cleaned_data_path": final_cleaned_path,
             "original_path": self.data_path,
             "execution_output": exec_result.output,
-            "execution_error": exec_result.error,
+            "execution_error": exec_result.error if not file_exists else None,
             "timestamp": datetime.now().isoformat()
         }
 
@@ -401,7 +468,7 @@ class DataCleaningAgent(ReActAgent):
         self.asset_manager.save_data(
             data=json.dumps(result_info, ensure_ascii=False, indent=2),
             filename="cleaning_result.json",
-            asset_type="cleaned_data",
+            asset_type="cleaning",
             metadata=result_info
         )
 

@@ -242,14 +242,21 @@ class ReActAgent(ABC):
         
         支持多种格式：
         1. ReAct 格式: "最终答案: xxx" 或 "Final Answer: xxx"
-        2. 直接返回: 如果没有特定格式标记，返回整个文本
+        2. 直接返回: 如果没有特定格式标记且不包含 ReAct 中间步骤，返回整个文本
         """
         # 尝试匹配 ReAct 格式
         match = re.search(r'(?:最终答案|Final Answer)[:：]\s*(.+)', text, re.DOTALL | re.IGNORECASE)
         if match:
             return match.group(1).strip()
         
-        # 如果没有匹配到格式标记，但文本非空，返回整个文本
+        # 检查是否包含 ReAct 中间步骤标记
+        # 如果包含这些标记，说明是中间状态，不是最终答案
+        react_markers = ['思考:', '思考：', 'Thought:', '行动:', '行动：', 'Action:', '行动输入:', '行动输入：', 'Action Input:']
+        for marker in react_markers:
+            if marker in text:
+                return None
+        
+        # 如果没有匹配到格式标记，但文本非空且不包含 ReAct 标记，返回整个文本
         # 这适用于直接生成内容的场景（如数据清洗方案）
         if text and len(text.strip()) > 10:
             return text.strip()

@@ -68,9 +68,10 @@ class AssetManager:
     def _create_directory_structure(self):
         """创建资产目录结构"""
         directories = [
-            "data",           # 原始数据
-            "cleaned_data",   # 清洗后数据
-            "features",       # 特征数据
+            "data",           # 原始数据和处理后的数据
+            "analysis",       # 数据分析结果
+            "cleaning",       # 数据清洗方案和结果
+            "features",       # 特征工程方案和结果
             "code",           # 生成代码
             "models",         # 训练好的模型
             "reports",        # 可视化报告
@@ -112,6 +113,9 @@ class AssetManager:
             AssetInfo 资产信息
         """
         asset_path = self._get_asset_path(asset_type, filename)
+        
+        # 确保目录存在
+        asset_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 根据数据类型选择保存方式
         if isinstance(data, str):
@@ -383,7 +387,7 @@ class AssetManager:
         """
         urls = {}
 
-        for asset_type in ["data", "cleaned_data", "features", "code", "models", "reports"]:
+        for asset_type in ["data", "analysis", "cleaning", "features", "code", "models", "reports"]:
             assets = self.list_assets(asset_type)
             if assets:
                 urls[asset_type] = [

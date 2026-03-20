@@ -21,8 +21,9 @@ class AutoMLAgent(ReActAgent):
     工作流程：
     1. 加载数据
     2. 分析数据
-    3. 生成特征
-    4. 训练模型
+    3. 数据清洗
+    4. 特征工程
+    5. 模型训练
     
     Attributes:
         llm: 语言模型实例
@@ -56,20 +57,26 @@ class AutoMLAgent(ReActAgent):
 你的职责：
 1. 理解用户的建模需求
 2. 加载和分析数据
-3. 生成有用的特征
-4. 训练并评估模型
+3. 数据清洗（处理缺失值、异常值、重复值等）
+4. 特征工程（特征构造、特征变换、特征选择等）
+5. 训练并评估模型
+
+**重要：标准工作流程顺序**
+数据分析 → 数据清洗 → 特征工程 → 模型训练
 
 工作原则：
 - 仔细分析数据质量和分布
-- 根据数据特点选择合适的特征工程方法
+- 数据分析后，应引导用户进行数据清洗
+- 数据清洗完成后再进行特征工程
+- 根据数据特点选择合适的建模方法
 - 明确区分分类和回归任务
 - 提供清晰的执行步骤和结果解释
 
 你可以使用以下工具来完成任务：
 - load_data: 加载数据文件
-- analyze_data: 分析数据
-- generate_features: 生成特征
-- train_model: 训练模型
+- analyze_data: 分析数据（第一步）
+- generate_features: 生成特征（数据清洗后）
+- train_model: 训练模型（特征工程后）
 
 请按照 ReAct 格式进行思考和行动。"""
     
@@ -105,9 +112,37 @@ class AutoMLAgent(ReActAgent):
         if not path:
             raise ValueError("请提供数据文件路径")
         
-        user_input = f"请分析数据文件: {path}"
+        # 加载 skills 内容
+        skills_content = ""
         
-        return self.run(user_input)
+        # 从 skills 目录加载相关内容
+        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
+        pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
+        
+        if techniques:
+            skills_content += f"## 数据分析技术参考\n\n{techniques[:1500]}\n\n"
+        if pitfalls:
+            skills_content += f"## 数据陷阱参考\n\n{pitfalls[:1500]}\n\n"
+        # 构建用户提示词
+        user_input = f"""请分析数据文件: {path}
+
+{skills_content}
+
+请生成 Markdown 格式的分析报告，包括：
+1. 数据质量问题分析
+2. 关键统计指标
+3. 下一步建议
+
+重要：方案必须基于上述实际数据分析结果，不要使用示例数据。
+"""
+
+        
+        # 调用 LLM 生成方案
+        result = self.run(user_input, stage="data_analysis")
+        
+        self.analysis_result = result.get("answer", "")
+        
+        return self.analysis_result
     
     def generate_features(self, data_path: str = None, target_column: str = None, task_type: str = "classification") -> Dict[str, Any]:
         """
@@ -171,8 +206,9 @@ class AutoMLAgent(ReActAgent):
         user_input = f"""请完成完整的建模流程：
 1. 加载数据: {data_path}
 2. 分析数据质量和分布
-3. 生成特征
-4. 训练{task_type}模型，目标列是 {target_column}
+3. 进行数据清洗
+4. 生成特征
+5. 训练{task_type}模型，目标列是 {target_column}
 
 请按步骤执行，并在最后总结建模结果。"""
         

@@ -95,7 +95,11 @@ class FeatureEngineeringAgent(ReActAgent):
         self,
         data_path: str = None,
         target_column: str = None,
-        task_type: str = "classification"
+        task_type: str = "classification",
+        analysis_result: str = None,
+        cleaning_result: str = None,
+        cleaned_data_path: str = None,
+        task_description: str = ""
     ) -> str:
         """
         生成特征工程思路
@@ -104,11 +108,16 @@ class FeatureEngineeringAgent(ReActAgent):
             data_path: 数据文件路径
             target_column: 目标列名
             task_type: 任务类型
+            analysis_result: 数据分析报告（可选）
+            cleaning_result: 数据清洗报告（可选）
+            cleaned_data_path: 清洗后的数据路径（可选，如果提供则使用此路径）
+            task_description: 用户的建模背景和要求
 
         Returns:
             特征工程方案（Markdown 格式）
         """
-        path = data_path or self.data_path
+        # 优先使用清洗后的数据路径
+        path = cleaned_data_path or data_path or self.data_path
         target = target_column or self.target_column
 
         if not path or not target:
@@ -118,7 +127,39 @@ class FeatureEngineeringAgent(ReActAgent):
         self.target_column = target
         self.task_type = task_type
 
-        # 首先加载并分析实际数据
+        # 构建上下文摘要
+        context_summary = ""
+        
+        # 添加用户的建模背景
+        if task_description:
+            context_summary += f"""
+## 用户建模背景和要求
+
+{task_description}
+
+**重要：请在特征工程方案中充分考虑用户的建模背景和要求。**
+
+"""
+        
+        # 如果有分析报告，添加到上下文
+        if analysis_result:
+            context_summary += f"""
+## 数据分析报告（来自数据分析阶段）
+
+{analysis_result[:3000]}
+
+"""
+        
+        # 如果有清洗报告，添加到上下文
+        if cleaning_result:
+            context_summary += f"""
+## 数据清洗报告（来自数据清洗阶段）
+
+{cleaning_result[:2000]}
+
+"""
+
+        # 加载数据基本信息
         import pandas as pd
 
         try:
@@ -136,15 +177,15 @@ class FeatureEngineeringAgent(ReActAgent):
 
             # 构建数据摘要
             data_summary = f"""
-## 数据基本信息
+{context_summary}
+## 当前数据基本信息
 
-- **文件路径**: {path}
+- **数据路径**: {path}
 - **数据形状**: {self.data_info['shape'][0]} 行 × {self.data_info['shape'][1]} 列
 - **目标列**: {target}
 - **目标列类型**: {self.data_info['target_dtype']}
-- **目标列唯一值数**: {self.data_info['target_unique']}
-- **数值列数量**: {len(self.data_info['numeric_columns'])}
-- **分类列数量**: {len(self.data_info['categorical_columns'])}
+- **目标列唯一值数量**: {self.data_info['target_unique']}
+- **任务类型**: {task_type}
 
 ## 数值列
 
@@ -154,7 +195,7 @@ class FeatureEngineeringAgent(ReActAgent):
 
 {', '.join(self.data_info['categorical_columns'][:20])}
 
-重要：请基于上述实际数据列名生成方案，不要使用示例数据。
+重要：请基于上述实际数据列名和前序阶段的分析结果生成方案。
 """
 
         except Exception as e:
@@ -336,6 +377,10 @@ class FeatureEngineeringAgent(ReActAgent):
             required_outputs=[]
         )
 
+        print(f"[Agent] 代码生成结果: code长度={len(code)}, exec_success={exec_result.success}")
+        if not exec_result.success:
+            print(f"[Agent] 执行错误: {exec_result.error}")
+
         self.feature_code = code
 
         # 保存代码到资产
@@ -367,6 +412,7 @@ class FeatureEngineeringAgent(ReActAgent):
             执行结果
         """
         from ..utils.code_generator import CodeGenerator
+        import shutil
 
         feature_code = code or self.feature_code
 
@@ -376,28 +422,41 @@ class FeatureEngineeringAgent(ReActAgent):
         # 使用代码生成器执行代码
         code_gen = CodeGenerator()
 
+        # 临时输出路径（在原始数据目录）
+        temp_features_path = self.data_path.replace('.csv', '_features.csv')
+
         context = {
             "data_path": self.data_path,
             "target_column": self.target_column,
             "task_type": self.task_type,
-            "feature_data_path": self.data_path.replace('.csv', '_features.csv')
+            "feature_data_path": temp_features_path
         }
 
         exec_result = code_gen.execute_code(feature_code, context)
 
         # 检查是否成功生成了特征数据文件
         import os
-        feature_data_path = self.data_path.replace('.csv', '_features.csv')
-        file_exists = os.path.exists(feature_data_path)
+        file_exists = os.path.exists(temp_features_path)
+
+        # 将特征工程后的数据复制到 session 目录
+        final_features_path = None
+        if file_exists:
+            session_features_path = self.asset_manager.session_dir / "data" / "features_data.csv"
+            session_features_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(temp_features_path, session_features_path)
+            final_features_path = str(session_features_path)
+            print(f"[Agent] 特征工程后数据已复制到 session 目录: {final_features_path}")
+            # 删除临时文件
+            os.remove(temp_features_path)
 
         # 构建结果
         result_info = {
-            "success": exec_result.success and file_exists,
-            "features_data_path": feature_data_path if file_exists else None,
+            "success": file_exists,  # 只要文件存在就认为成功
+            "features_data_path": final_features_path,
             "original_path": self.data_path,
             "target_column": self.target_column,
             "execution_output": exec_result.output,
-            "execution_error": exec_result.error,
+            "execution_error": exec_result.error if not file_exists else None,
             "timestamp": datetime.now().isoformat()
         }
 

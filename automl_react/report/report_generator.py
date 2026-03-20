@@ -98,7 +98,7 @@ class ReportGenerator:
 
     def _load_cleaning_result(self) -> Dict[str, Any]:
         """加载数据清洗结果"""
-        data = self.asset_manager.read_asset("cleaned_data", "cleaning_result.json")
+        data = self.asset_manager.read_asset("cleaning", "cleaning_result.json")
         if data:
             return json.loads(data)
         return {}
