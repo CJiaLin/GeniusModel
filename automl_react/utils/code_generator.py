@@ -75,12 +75,26 @@ class CodeGenerator:
 """
         
         try:
-            # 调用 LLM
-            response = self.llm.invoke(structured_prompt)
-            content = response.content if hasattr(response, 'content') else str(response)
+            # 使用流式输出
+            print(f"[CodeGenerator] 开始流式生成代码...")
+            full_response = ""
+            
+            try:
+                for chunk in self.llm.stream(structured_prompt):
+                    if chunk.content:
+                        content = chunk.content
+                        full_response += content
+                        print(content, end="", flush=True)
+            except Exception as e:
+                # 如果流式输出失败，回退到同步调用
+                print(f"\n[CodeGenerator] 流式输出失败，回退到同步调用: {e}")
+                response = self.llm.invoke(structured_prompt)
+                full_response = response.content if hasattr(response, 'content') else str(response)
+            
+            print()  # 换行
             
             # 尝试解析 JSON
-            result = self._parse_json_response(content)
+            result = self._parse_json_response(full_response)
             
             if result:
                 raw_code = result.get('code', '')

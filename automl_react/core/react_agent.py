@@ -295,7 +295,7 @@ class ReActAgent(ABC):
     
     def _call_llm(self, prompt: str, stage: str = "") -> Any:
         """
-        调用 LLM 并记录日志
+        调用 LLM 并记录日志（使用流式输出）
         
         Args:
             prompt: 提示词
@@ -309,8 +309,24 @@ class ReActAgent(ABC):
         
         start_time = datetime.now()
         
-        # 调用 LLM
-        response = self.llm.invoke(prompt)
+        # 使用流式输出
+        full_response = ""
+        print(f"[LLM] 开始流式输出 (stage: {stage})...")
+        
+        try:
+            for chunk in self.llm.stream(prompt):
+                if chunk.content:
+                    content = chunk.content
+                    full_response += content
+                    # 实时打印输出
+                    print(content, end="", flush=True)
+        except Exception as e:
+            # 如果流式输出失败，回退到同步调用
+            print(f"\n[LLM] 流式输出失败，回退到同步调用: {e}")
+            response = self.llm.invoke(prompt)
+            full_response = response.content if hasattr(response, 'content') else str(response)
+        
+        print()  # 换行
         
         # 获取模型配置
         llm_config = self.config_loader.get_llm_config()
@@ -318,16 +334,17 @@ class ReActAgent(ABC):
         provider = llm_config.get("provider", "unknown")
         
         # 记录日志
-        self.llm_logger.log_call_from_response(
+        self.llm_logger.log_call(
             model_name=model_name,
             provider=provider,
             input_content=prompt,
-            response=response,
-            start_time=start_time,
+            output_content=full_response,
             stage=stage
         )
         
-        return response
+        # 返回与 invoke 相同格式的响应对象
+        from langchain_core.messages import AIMessage
+        return AIMessage(content=full_response)
     
     def _check_confirmation_required(self, stage: str) -> bool:
         """

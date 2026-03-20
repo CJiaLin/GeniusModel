@@ -704,21 +704,21 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
 
     # 如果清洗成功，将清洗后的数据复制到 session 目录（如果还没有在 session 目录）
     if result.get("success") and result.get("cleaned_data_path"):
-            cleaned_path = Path(result["cleaned_data_path"])
-            session_cleaned_path = asset_manager.session_dir / "data" / "cleaned_data.csv"
-            
-            # 检查是否已经在 session 目录下
-            if cleaned_path.resolve() == session_cleaned_path.resolve():
-                print(f"[API] 清洗后数据已在 session 目录: {cleaned_path}")
-            elif cleaned_path.exists():
-                session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(cleaned_path, session_cleaned_path)
-                print(f"[API] 清洗后数据已复制到: {session_cleaned_path}")
-                result["cleaned_data_path"] = str(session_cleaned_path)
-            else:
-                print(f"[API] 警告: 清洗后的数据文件不存在: {cleaned_path}")
+        cleaned_path = Path(result["cleaned_data_path"])
+        session_cleaned_path = asset_manager.session_dir / "data" / "cleaned_data.csv"
+        
+        # 检查是否已经在 session 目录
+        if cleaned_path.resolve() == session_cleaned_path.resolve():
+            print(f"[API] 清洗后数据已在 session 目录: {cleaned_path}")
+        elif cleaned_path.exists():
+            session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(cleaned_path, session_cleaned_path)
+            print(f"[API] 清洗后数据已复制到: {session_cleaned_path}")
+            result["cleaned_data_path"] = str(session_cleaned_path)
         else:
-            print(f"[API] 警告: 清洗未成功或未生成清洗后的数据")
+            print(f"[API] 警告: 清洗后的数据文件不存在: {cleaned_path}")
+    else:
+        print(f"[API] 警告: 清洗未成功或未生成清洗后的数据")
 
     # 构建执行结果
     execution_result = {
@@ -902,12 +902,28 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail="LLM 客户端创建失败")
     
     # 这里可以实现更复杂的对话逻辑
-    # 简化处理：直接返回 LLM 响应
+    # 简化处理：使用流式输出
     try:
-        response = llm.invoke(request.message)
+        print(f"[Chat] 开始流式对话...")
+        full_response = ""
+        
+        try:
+            for chunk in llm.stream(request.message):
+                if chunk.content:
+                    content = chunk.content
+                    full_response += content
+                    print(content, end="", flush=True)
+        except Exception as e:
+            # 如果流式输出失败，回退到同步调用
+            print(f"\n[Chat] 流式输出失败，回退到同步调用: {e}")
+            response = llm.invoke(request.message)
+            full_response = response.content if hasattr(response, 'content') else str(response)
+        
+        print()  # 换行
+        
         return {
             "success": True,
-            "response": response.content if hasattr(response, 'content') else str(response)
+            "response": full_response
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -929,17 +945,17 @@ async def chat_stream(session_id: str, message: str, model: str = None):
                 yield f"data: {json.dumps({'type': 'error', 'content': 'LLM 客户端创建失败'})}\n\n"
                 return
             
-            # 调用 LLM
-            response = llm.invoke(message)
-            content = response.content if hasattr(response, 'content') else str(response)
-            
-            # 模拟流式输出
-            chunks = content.split("\n")
-            for chunk in chunks:
-                if chunk.strip():
-                    newline = "\n"
-                    yield f"data: {json.dumps({'type': 'content', 'content': chunk + newline})}\n\n"
-                    await asyncio.sleep(0.05)
+            # 使用真正的流式输出
+            try:
+                for chunk in llm.stream(message):
+                    if chunk.content:
+                        content = chunk.content
+                        yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
+                        await asyncio.sleep(0.01)  # 小延迟确保数据发送
+            except Exception as e:
+                # 如果流式输出失败，回退到同步调用
+                yield f"data: {json.dumps({'type': 'error', 'content': f'流式输出失败: {str(e)}'})}\n\n"
+                return
             
             # 发送完成消息
             done_msg = "处理完成"
