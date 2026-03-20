@@ -164,7 +164,10 @@ class AssetManager:
         Returns:
             AssetInfo 资产信息
         """
-        return self.save_data(code, filename, "code", metadata)
+        # 先清理代码，确保是纯 Python 代码
+        cleaned_code = self._sanitize_code(code)
+        
+        return self.save_data(cleaned_code, filename, "code", metadata)
 
     def save_model(
         self,
@@ -231,6 +234,46 @@ class AssetManager:
             AssetInfo 资产信息
         """
         return self.save_data(script, "pipeline.py", "code", metadata)
+
+    def _sanitize_code(self, code: str) -> str:
+        """
+        清理代码中的 JSON 包装和 Markdown 标记，确保是纯 Python 源码。
+        
+        Args:
+            code: 原始代码内容
+            
+        Returns:
+            清理后的纯 Python 代码
+        """
+        if not code:
+            return ""
+        
+        import json
+        cleaned = code.strip()
+        
+        # 如果代码看起来像是 JSON 格式（以 { 开头），尝试提取其中的 code 字段
+        if cleaned.startswith('{') and ('"code"' in cleaned or "'code'" in cleaned):
+            try:
+                parsed = json.loads(cleaned)
+                if isinstance(parsed, dict) and 'code' in parsed:
+                    extracted_code = parsed['code']
+                    if isinstance(extracted_code, str):
+                        return extracted_code
+                    return str(extracted_code)
+            except json.JSONDecodeError:
+                pass
+        
+        # 移除常见的 Markdown 代码块围栏行
+        lines = []
+        for line in cleaned.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                continue
+            lines.append(line)
+        
+        cleaned = "\n".join(lines).strip()
+        
+        return cleaned
 
     def _create_asset_info(
         self,

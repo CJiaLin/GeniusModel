@@ -702,19 +702,23 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
         traceback.print_exc()
         raise
 
-    # 如果清洗成功，将清洗后的数据复制到 session 目录
+    # 如果清洗成功，将清洗后的数据复制到 session 目录（如果还没有在 session 目录）
     if result.get("success") and result.get("cleaned_data_path"):
-        cleaned_path = Path(result["cleaned_data_path"])
-        if cleaned_path.exists():
+            cleaned_path = Path(result["cleaned_data_path"])
             session_cleaned_path = asset_manager.session_dir / "data" / "cleaned_data.csv"
-            session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(cleaned_path, session_cleaned_path)
-            print(f"[API] 清洗后数据已复制到: {session_cleaned_path}")
-            result["cleaned_data_path"] = str(session_cleaned_path)
+            
+            # 检查是否已经在 session 目录下
+            if cleaned_path.resolve() == session_cleaned_path.resolve():
+                print(f"[API] 清洗后数据已在 session 目录: {cleaned_path}")
+            elif cleaned_path.exists():
+                session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(cleaned_path, session_cleaned_path)
+                print(f"[API] 清洗后数据已复制到: {session_cleaned_path}")
+                result["cleaned_data_path"] = str(session_cleaned_path)
+            else:
+                print(f"[API] 警告: 清洗后的数据文件不存在: {cleaned_path}")
         else:
-            print(f"[API] 警告: 清洗后的数据文件不存在: {cleaned_path}")
-    else:
-        print(f"[API] 警告: 清洗未成功或未生成清洗后的数据")
+            print(f"[API] 警告: 清洗未成功或未生成清洗后的数据")
 
     # 构建执行结果
     execution_result = {
