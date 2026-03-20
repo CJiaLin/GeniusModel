@@ -1,0 +1,7 @@
+{
+  "success": true,
+  "cleaned_data_path": "/Users/cjialin/code/AutoMLByLLM/assets/test_cleaning_1773990072/data/cleaned_data.csv",
+  "original_path": "/Users/cjialin/code/AutoMLByLLM/train.csv",
+  "timestamp": "2026-03-20T15:08:33.937342",
+  "stage": "data_cleaning"
+}
