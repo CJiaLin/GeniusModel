@@ -1,124 +1,129 @@
-# AutoML Agent - 智能建模服务系统
+# AutoML ReAct - 交互式智能建模系统
 
 ## 项目简介
 
-基于 LangChain + LangGraph 开发的综合 AutoML Agent 系统，提供从数据导入到模型评估的完整自动化机器学习建模流程。系统支持传统特征工程和 LLM 驱动的智能特征生成两种模式，并通过交互式对话方式让用户全程参与建模决策。
+基于 **ReAct (Reasoning + Acting)** Agent 架构开发的交互式 AutoML 系统，提供从数据上传到模型部署的完整自动化机器学习建模流程。系统支持用户在每个关键阶段（数据清洗、特征工程、模型训练）进行确认和干预，确保建模过程符合业务需求。
 
 ## 核心功能
 
-### 1. 智能建模流程编排
-- 自动解析用户建模意图（分类/回归/聚类等任务类型）
-- 完整的端到端建模流程：数据加载 → 质量分析 → 数据清洗 → 特征工程 → 模型训练 → 模型评估
-- 支持交互式对话式建模，每步等待用户确认
+### 1. 交互式建模流程
+- **数据上传**: 支持 CSV、Excel、JSON 等多种格式
+- **数据分析**: 自动生成数据质量分析报告
+- **数据清洗**: 生成清洗方案 → 用户确认 → 执行清洗
+- **特征工程**: 生成特征方案 → 用户确认 → 执行特征工程
+- **模型训练**: 生成建模方案 → 用户确认 → 训练模型
+- **结果输出**: 模型文件、全流程脚本、可视化报告
 
-### 2. 数据自动探索与清洗
-- 支持多种数据格式加载（CSV、Excel、JSON）
-- 自动检测数据类型（数值型、类别型）
-- 全面数据质量分析（缺失值、重复值、异常值检测）
-- 智能数据清洗策略（自动填充缺失值、去重、异常值处理）
+### 2. 用户确认机制
+每个关键阶段都支持用户确认：
+- ✅ **确认**: 按方案执行
+- ✏️ **修改**: 提供修改意见后重新生成方案
+- ⏭️ **跳过**: 跳过当前阶段
 
-### 3. 特征工程自动化
+### 3. Skills 集成
+系统自动调用 Skills 目录中的专业知识：
+- **data-analysis-1.0.2**: 数据分析方法论、数据陷阱识别
+- **afrexai-ml-engineering-1.0.0**: ML 工程最佳实践
+- **ml-model-eval-benchmark-0.1.0**: 模型评估基准
 
-**传统模式**：
-- 交互特征生成（乘积、商）
-- 聚合特征生成（分组统计）
-- 多项式特征衍生
-- 统计特征生成
+### 4. 资产管理系统
+自动保存所有生成的资产：
+- 清洗后的数据文件
+- 特征工程后的数据文件
+- 生成的 Python 代码
+- 训练好的模型文件
+- 建模流程报告
 
-**LLM 驱动模式（核心特色）**：
-- LLM 分析数据结构和业务场景
-- 自主思考生成特征方向
-- 生成具体特征加工代码并执行
-- 特征质量评估（IV 值、相关性分析）
-- 基于质量报告的智能特征选择
+### 5. LLM 调用日志
+记录每次 LLM 调用的完整信息：
+- 输入（System Prompt + User Prompt）
+- 输出（Response）
+- 时间戳和元数据
+- 存储格式：JSONL
 
-### 4. 模型自动选择与调参
-- 根据任务类型和数据特征自动推荐模型
-- 支持多种模型：LogisticRegression、RandomForest、XGBoost、LightGBM、SVM 等
-- 自动超参数配置
-- 多模型性能比较，选出最佳模型
-
-### 5. 安全代码执行环境
-- 沙箱环境执行用户生成的代码
-- 防止恶意代码执行
-- 支持代码执行结果验证
-
-### 6. API 服务
-- FastAPI 提供 RESTful API
-- 支持 WebSocket 实时流式输出
-- 跨域支持，便于集成
+### 6. 配置驱动
+所有 Prompt 和 LLM 配置都通过 YAML 文件管理：
+- `prompts.yaml`: 所有 Agent 的 Prompt 模板
+- `llm_config.yaml`: LLM 模型配置、API 密钥、重试策略
 
 ## 项目架构
 
 ```
 AutoMLByLLM/
-├── agents/                    # 核心 Agent 模块
-│   ├── base_agent.py         # Agent 基类
-│   ├── modeling_planner.py   # 建模计划器（总控 Agent）
-│   ├── data_agent.py         # 数据处理 Agent
-│   ├── feature_engineer.py   # 特征工程 Agent（支持 LLM 驱动）
-│   └── model_agent.py        # 模型训练 Agent
+├── automl_react/                 # 核心代码库
+│   ├── agents/                   # Agent 模块
+│   │   ├── data_cleaning_agent.py      # 数据清洗 Agent
+│   │   ├── feature_engineering_agent.py # 特征工程 Agent
+│   │   ├── model_training_agent.py      # 模型训练 Agent
+│   │   ├── automl_agent.py              # AutoML 主 Agent
+│   │   └── orchestrator.py              # 流程编排器
+│   ├── api/                      # FastAPI 后端
+│   │   └── main.py               # API 主入口（含 SSE 流式输出）
+│   ├── assets/                   # 资产管理
+│   │   └── asset_manager.py      # 资产保存和下载
+│   ├── config/                   # 配置管理
+│   │   ├── config_loader.py      # 配置加载器
+│   │   ├── prompts.yaml          # Prompt 配置
+│   │   └── llm_config.yaml       # LLM 配置
+│   ├── confirmation/             # 用户确认机制
+│   │   └── confirmation_point.py # 确认点实现
+│   ├── core/                     # 核心组件
+│   │   ├── react_agent.py        # ReAct Agent 基类
+│   │   ├── memory.py             # 记忆管理
+│   │   └── observation.py        # 观察结果
+│   ├── evaluation/               # 模型评估
+│   │   └── model_evaluator.py    # 评估指标计算
+│   ├── logger/                   # 日志记录
+│   │   └── llm_logger.py         # LLM 调用日志
+│   ├── report/                   # 报告生成
+│   │   ├── report_generator.py   # Markdown 报告
+│   │   └── pipeline_generator.py # 全流程脚本
+│   ├── skills_loader/            # Skills 加载
+│   │   └── skill_loader.py       # Skill 内容加载
+│   ├── tools/                    # 工具集
+│   │   ├── base_tool.py          # 工具基类
+│   │   ├── data_tools.py         # 数据处理工具
+│   │   ├── feature_tools.py      # 特征工程工具
+│   │   └── model_tools.py        # 模型工具
+│   ├── workflow/                 # 工作流管理
+│   │   └── workflow_state.py     # 工作流状态
+│   └── README.md
 │
-├── automl_agent/             # AutoML 核心引擎
-│   ├── engine.py            # 主引擎
-│   ├── interactive.py       # 对话式交互引擎
-│   ├── models.py            # 数据模型定义
-│   ├── enums.py             # 枚举类型定义
-│   ├── core/                # 核心组件
-│   │   ├── executor.py     # 代码执行器
-│   │   └── protocol.py     # 通信协议
-│   └── mcp/                 # MCP 协议实现
+├── frontend/                     # 前端界面
+│   └── index.html               # 单页应用（含 CSS/JS）
 │
-├── api/                      # FastAPI 服务
-│   ├── main.py             # API 主入口
-│   └── routes/             # API 路由
-│       └── chat_api.py     # 对话 API
+├── skills/                       # Skills 目录
+│   ├── afrexai-ml-engineering-1.0.0/
+│   ├── data-analysis-1.0.2/
+│   └── ml-model-eval-benchmark-0.1.0/
 │
-├── tools/                    # MCP 标准化工具
-│   ├── data_tools.py       # 数据处理工具
-│   ├── model_tools.py      # 模型工具
-│   ├── feature_tools.py    # 特征工程工具
-│   └── eval_tools.py       # 评估工具
+├── logs/                         # 日志目录
+│   └── llm_calls/               # LLM 调用日志
 │
-├── core/                     # 核心功能
-│   ├── pipeline.py          # 流程编排
-│   ├── state.py            # 状态管理
-│   └── prompt_loader.py    # 提示词加载
+├── assets/                       # 生成的资产
+│   └── {session_id}/            # 按会话组织
 │
-├── ui/                       # 前端界面
-│   ├── frontend/           # Web 前端（HTML/JS）
-│   └── dialog_app.py       # Streamlit 应用
-│
-├── skills/                   # 技能模块
-│   ├── afrexai-ml-engineering-1.0.0/    # ML 工程方法论
-│   ├── data-analysis-1.0.2/              # 数据分析方法论
-│   └── ml-model-eval-benchmark-0.1.0/   # 模型评估基准
-│
-├── prompts/                  # 提示词模板
-│   ├── planner_prompts.yaml
-│   ├── data_prompts.yaml
-│   ├── feature_prompts.yaml
-│   └── model_prompts.yaml
-│
-└── config.yaml              # 配置文件
+├── requirements.txt              # 依赖
+└── README.md                     # 本文件
 ```
 
 ## 技术栈
 
-- **语言模型**: LangChain + LangGraph
+- **Agent 架构**: ReAct (Reasoning + Acting)
 - **Web 框架**: FastAPI + Uvicorn
+- **流式通信**: Server-Sent Events (SSE)
+- **前端**: 原生 HTML/JS + Marked.js (Markdown 渲染) + Highlight.js (代码高亮)
 - **数据处理**: Pandas + NumPy
-- **机器学习**: Scikit-learn + XGBoost + LightGBM
-- **数据验证**: Pydantic
-- **可视化**: Matplotlib + Seaborn
-- **前端**: HTML/JS + Streamlit
+- **机器学习**: Scikit-learn + XGBoost
+- **配置管理**: PyYAML
+- **LLM 支持**: OpenAI 兼容 API（GPT、Claude、Kimi、DeepSeek、通义千问等）
 
 ## 快速开始
 
 ### 环境要求
 
 - Python 3.9+
-- API Key（支持 OpenAI 兼容 API，如 Kimi、Claude、GPT 等）
+- 支持 OpenAI 兼容 API 的 LLM 服务
 
 ### 安装依赖
 
@@ -128,177 +133,164 @@ pip install -r requirements.txt
 
 ### 配置 LLM
 
-编辑 `config.yaml` 文件：
+编辑 `automl_react/config/llm_config.yaml`：
 
 ```yaml
-llm:
-  base_url: "https://api.moonshot.cn"    # API 端点
-  api_key: "your-api-key"                 # 你的 API Key
-  model: "kimi-k2-0905-preview"           # 模型名称
-  temperature: 0
-  timeout: 60
-  max_retries: 3
+default_model: "gpt-4"
+
+models:
+  gpt-4:
+    provider: "openai"
+    model_name: "gpt-4"
+    temperature: 0.1
+    max_tokens: 4096
+    api_key: "${OPENAI_API_KEY}"  # 从环境变量读取
+    base_url: null
 ```
 
-支持的 API 端点：
-- Kimi: `https://api.moonshot.cn`
-- OpenAI: `https://api.openai.com`
-- Claude: `https://api.anthropic.com`
-- 其他兼容 OpenAI API 的服务
+支持的环境变量：
+- `OPENAI_API_KEY`: OpenAI API 密钥
+- `ANTHROPIC_API_KEY`: Claude API 密钥
+- `MOONSHOT_API_KEY`: Kimi API 密钥
+- `DEEPSEEK_API_KEY`: DeepSeek API 密钥
+- `DASHSCOPE_API_KEY`: 通义千问 API 密钥
 
----
+### 启动服务
 
-## 服务启动
-
-### 方式一：后端 API 服务
+**1. 启动后端 API**：
 
 ```bash
-# 启动后端 API 服务（默认端口 8000）
-python -m api.main
-
-# 或使用 uvicorn 指定端口
-uvicorn api.main:app --host 0.0.0.0 --port 8000
+cd /Users/cjialin/code/AutoMLByLLM
+python -m automl_react.api.main
 ```
 
-后端服务启动后访问：
-- API 文档：http://localhost:8000/docs
-- ReDoc 文档：http://localhost:8000/redoc
+服务将在 http://localhost:8000 启动
 
-### 方式二：Web 前端 + 后端 API
-
-**终端 1 - 启动后端**：
-```bash
-python -m api.main
-```
-
-**终端 2 - 启动前端**：
-```bash
-python -m http.server 8080 --directory ui/frontend
-```
-
-访问：http://localhost:8080
-
-### 方式三：Streamlit 应用
+**2. 启动前端**（可选，也可直接用浏览器打开）：
 
 ```bash
-streamlit run ui/dialog_app.py
+cd /Users/cjialin/code/AutoMLByLLM/frontend
+python -m http.server 8080
 ```
 
-访问：http://localhost:8501
+访问 http://localhost:8080
 
-### 方式四：命令行建模
+### 直接使用浏览器打开
+
+前端是独立的单页应用，可以直接用浏览器打开：
 
 ```bash
-# 交互式建模
-python main.py --goal "预测房价" --data house.csv --target price --use-llm-features
-
-# 非交互模式
-python main.py --goal "预测流失" --data churn.csv --target churn --no-interactive
+open /Users/cjialin/code/AutoMLByLLM/frontend/index.html
 ```
 
----
+## API 接口
 
-## API 接口说明
+### 主要端点
 
-### 主要接口
-
-| 接口 | 方法 | 说明 |
+| 端点 | 方法 | 说明 |
 |------|------|------|
-| `/chat/{session_id}` | WebSocket | 对话式建模（流式输出） |
-| `/upload/{session_id}` | POST | 上传数据文件 |
-| `/model/download/{session_id}` | GET | 下载训练好的模型 |
-| `/report/download/{session_id}` | GET | 下载建模报告 |
-| `/data/download/cleaned/{session_id}` | GET | 下载清洗后的数据 |
-| `/data/download/featured/{session_id}` | GET | 下载特征工程后的数据 |
+| `/workflow/start` | POST | 启动新工作流 |
+| `/workflow/{session_id}/stage/{stage}/run` | POST | 执行指定阶段 |
+| `/confirmation/submit` | POST | 提交用户确认 |
+| `/chat/stream` | POST | 流式对话（SSE） |
+| `/assets/{session_id}/{asset_type}/{filename}` | GET | 下载资产文件 |
+| `/report/generate` | POST | 生成建模报告 |
+| `/pipeline/generate` | POST | 生成全流程脚本 |
 
-### WebSocket 对话示例
+### 流式对话示例
 
 ```javascript
-const ws = new WebSocket('ws://localhost:8000/chat/session-123');
+const response = await fetch('http://localhost:8000/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        session_id: 'session-123',
+        message: '分析这个数据文件'
+    })
+});
 
-// 发送消息
-ws.send(JSON.stringify({
-    type: 'message',
-    content: '我想预测用户是否流失'
-}));
-
-// 接收流式响应
-ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    console.log(data.content);
-};
+const reader = response.body.getReader();
+while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    console.log(new TextDecoder().decode(value));
+}
 ```
-
----
-
-## 编程使用
-
-```python
-from automl_agent.engine import AutoMLEngine
-from llm_client import configure_llm, get_llm_client, set_system_prompt
-
-# 配置 LLM（可选，默认从 config.yaml 读取）
-configure_llm(
-    base_url="https://api.moonshot.cn",
-    api_key="your-api-key",
-    model="kimi-k2-0905-preview"
-)
-
-# 自定义 System Prompt（可选）
-set_system_prompt("你是一位专业的AutoML专家...")
-
-# 获取 LLM 客户端
-llm = get_llm_client()
-
-# 创建引擎并运行
-engine = AutoMLEngine(llm)
-result = engine.run(
-    user_goal="预测用户是否流失",
-    data_path="data.csv",
-    target_column="churn",
-    use_llm_features=True  # 使用 LLM 特征生成
-)
-
-print(f"模型准确率: {result.metrics['accuracy']}")
-```
-
----
 
 ## 配置说明
 
-### 配置文件 (config.yaml)
+### Prompts 配置 (`automl_react/config/prompts.yaml`)
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `base_url` | API 端点 | `https://api.moonshot.cn` |
-| `api_key` | API 密钥 | - |
-| `model` | 模型名称 | `kimi-k2-0905-preview` |
-| `temperature` | 温度参数 | `0` |
-| `timeout` | 超时时间（秒） | `60` |
-| `max_retries` | 最大重试次数 | `3` |
+```yaml
+data_cleaning:
+  system_prompt: "..."
+  plan_generation: "..."
+  code_generation: "..."
+  code_generation_full: "..."
 
-### 命令行参数
-
-```
---goal              建模目标描述（必填）
---data              数据文件路径（必填）
---target            目标列名（必填）
---use-llm-features  使用 LLM 特征生成
---no-interactive    非交互模式
+feature_engineering:
+  system_prompt: "..."
+  plan_generation: "..."
+  ...
 ```
 
----
+### LLM 配置 (`automl_react/config/llm_config.yaml`)
+
+```yaml
+default_model: "gpt-4"
+
+models:
+  gpt-4:
+    provider: "openai"
+    model_name: "gpt-4"
+    temperature: 0.1
+    max_tokens: 4096
+    api_key: "${OPENAI_API_KEY}"
+    base_url: null
+
+stage_models:
+  data_analysis: "gpt-4"
+  data_cleaning: "gpt-4"
+  feature_engineering: "gpt-4"
+  model_training: "gpt-4"
+
+logging:
+  enabled: true
+  log_dir: "logs/llm_calls"
+  log_format: "jsonl"
+```
+
+## 使用流程
+
+1. **上传数据**: 在网页上选择数据文件上传
+2. **数据分析**: 系统自动分析数据质量
+3. **数据清洗**: 
+   - 系统生成清洗方案（Markdown 格式）
+   - 用户确认或修改方案
+   - 执行清洗并保存结果
+4. **特征工程**:
+   - 系统生成特征工程方案
+   - 用户确认或修改方案
+   - 执行特征工程并保存结果
+5. **模型训练**:
+   - 系统生成建模方案
+   - 用户确认或修改方案
+   - 训练模型并评估
+6. **结果下载**:
+   - 下载训练好的模型
+   - 下载全流程 Python 脚本
+   - 下载建模分析报告
 
 ## 项目特色
 
-1. **LLM 驱动的特征工程**: 利用大语言模型的推理能力，自动分析数据场景，生成有业务意义的特征
-2. **全程交互式建模**: 用户可以参与每个决策步骤，确保模型符合业务需求
-3. **代码执行安全**: 沙箱环境执行生成的代码，保证系统安全
-4. **灵活的 API 集成**: FastAPI 提供完整的 RESTful 接口，便于二次开发
-5. **多前端支持**: 提供 Web 前端和 Streamlit 两种界面
-6. **技能模块集成**: 内置 ML 工程方法论和数据分析最佳实践
-
----
+1. **ReAct Agent 架构**: 结合推理和行动，实现智能决策
+2. **全程用户参与**: 每个关键阶段都可确认和干预
+3. **Skills 知识集成**: 自动调用专业知识库
+4. **配置驱动**: 零代码修改即可调整 Prompt 和模型
+5. **完整资产保存**: 所有中间产物和最终结果都可下载
+6. **详细日志记录**: 完整的 LLM 调用链路可追溯
+7. **流式响应**: 实时展示 LLM 生成内容
+8. **Markdown 渲染**: 美观的方案展示和代码高亮
 
 ## 许可证
 

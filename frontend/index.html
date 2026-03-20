@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoML 交互式建模平台</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 0;
+            text-align: center;
+            margin-bottom: 30px;
+            border-radius: 10px;
+        }
+
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .main-layout {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 20px;
+        }
+
+        .sidebar {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            height: fit-content;
+        }
+
+        .sidebar h3 {
+            margin-bottom: 15px;
+            color: #667eea;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #5568d3;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-success {
+            background: #28a745;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .btn-warning {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .content-area {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            min-height: 600px;
+        }
+
+        .workflow-steps {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
+        .step {
+            text-align: center;
+            flex: 1;
+            position: relative;
+        }
+
+        .step:not(:last-child)::after {
+            content: '';
+            position: absolute;
+            top: 20px;
+            right: -50%;
+            width: 100%;
+            height: 2px;
+            background: #ddd;
+            z-index: 0;
+        }
+
+        .step-number {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #ddd;
+            color: #666;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 10px;
+            font-weight: bold;
+            position: relative;
+            z-index: 1;
+        }
+
+        .step.active .step-number {
+            background: #667eea;
+            color: white;
+        }
+
+        .step.completed .step-number {
+            background: #28a745;
+            color: white;
+        }
+
+        .step-title {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .step.active .step-title {
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .panel {
+            display: none;
+        }
+
+        .panel.active {
+            display: block;
+        }
+
+        .panel h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .markdown-content {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .markdown-content h1,
+        .markdown-content h2,
+        .markdown-content h3 {
+            margin: 20px 0 10px;
+        }
+
+        .markdown-content pre {
+            background: #f4f4f4;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+
+        .markdown-content code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        .confirmation-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            padding: 20px;
+            background: #fff3cd;
+            border-radius: 5px;
+            border: 1px solid #ffc107;
+        }
+
+        .status-message {
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .status-message.success {
+            background: #d4edda;
+            border: 1px solid #28a745;
+            color: #155724;
+        }
+
+        .status-message.error {
+            background: #f8d7da;
+            border: 1px solid #dc3545;
+            color: #721c24;
+        }
+
+        .status-message.info {
+            background: #d1ecf1;
+            border: 1px solid #17a2b8;
+            color: #0c5460;
+        }
+
+        .assets-list {
+            margin-top: 20px;
+        }
+
+        .asset-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: #f8f9fa;
+            margin-bottom: 10px;
+            border-radius: 5px;
+        }
+
+        .asset-item a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .asset-item a:hover {
+            text-decoration: underline;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .chat-container {
+            height: 400px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            background: #f8f9fa;
+        }
+
+        .chat-message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .chat-message.user {
+            background: #667eea;
+            color: white;
+            margin-left: 20%;
+        }
+
+        .chat-message.assistant {
+            background: white;
+            border: 1px solid #ddd;
+            margin-right: 20%;
+        }
+
+        .chat-input {
+            display: flex;
+            padding: 10px;
+            background: white;
+            border-top: 1px solid #ddd;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+
+        .skills-reference {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            border-left: 4px solid #667eea;
+        }
+
+        .skills-reference h4 {
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+
+        @media (max-width: 1024px) {
+            .main-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .workflow-steps {
+                flex-wrap: wrap;
+            }
+
+            .step {
+                flex: 0 0 50%;
+                margin-bottom: 20px;
+            }
+
+            .step:not(:last-child)::after {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AutoML 交互式建模平台</h1>
+            <p>基于大模型的自动化机器学习工作流</p>
+        </header>
+
+        <div class="main-layout">
+            <aside class="sidebar">
+                <h3>工作流配置</h3>
+                
+                <div class="form-group">
+                    <label for="sessionId">会话 ID</label>
+                    <input type="text" id="sessionId" placeholder="输入会话ID">
+                </div>
+
+                <div class="form-group">
+                    <label for="dataPath">数据文件路径</label>
+                    <input type="text" id="dataPath" placeholder="例如: data.csv">
+                </div>
+
+                <div class="form-group">
+                    <label for="targetColumn">目标列名</label>
+                    <input type="text" id="targetColumn" placeholder="例如: target">
+                </div>
+
+                <div class="form-group">
+                    <label for="taskType">任务类型</label>
+                    <select id="taskType">
+                        <option value="classification">分类</option>
+                        <option value="regression">回归</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="model">模型</label>
+                    <select id="model">
+                        <option value="claude-sonnet-4-20250514-thinking">Claude Sonnet</option>
+                        <option value="claude-opus-4-20250514">Claude Opus</option>
+                    </select>
+                </div>
+
+                <button class="btn" onclick="startWorkflow()">启动工作流</button>
+                
+                <div style="margin-top: 20px;">
+                    <button class="btn btn-secondary" onclick="generateReport()">生成报告</button>
+                </div>
+                
+                <div style="margin-top: 10px;">
+                    <button class="btn btn-secondary" onclick="generatePipeline()">生成全流程脚本</button>
+                </div>
+            </aside>
+
+            <main class="content-area">
+                <div class="workflow-steps">
+                    <div class="step active" data-step="1">
+                        <div class="step-number">1</div>
+                        <div class="step-title">数据上传</div>
+                    </div>
+                    <div class="step" data-step="2">
+                        <div class="step-number">2</div>
+                        <div class="step-title">数据清洗</div>
+                    </div>
+                    <div class="step" data-step="3">
+                        <div class="step-number">3</div>
+                        <div class="step-title">特征工程</div>
+                    </div>
+                    <div class="step" data-step="4">
+                        <div class="step-number">4</div>
+                        <div class="step-title">模型训练</div>
+                    </div>
+                    <div class="step" data-step="5">
+                        <div class="step-number">5</div>
+                        <div class="step-title">结果输出</div>
+                    </div>
+                </div>
+
+                <!-- 数据上传面板 -->
+                <div class="panel active" id="panel-upload">
+                    <h2>数据上传</h2>
+                    <p>请配置左侧的工作流参数，然后点击"启动工作流"按钮开始。</p>
+                    
+                    <div id="upload-status"></div>
+                </div>
+
+                <!-- 数据清洗面板 -->
+                <div class="panel" id="panel-cleaning">
+                    <h2>数据清洗</h2>
+                    <div id="cleaning-content">
+                        <button class="btn" onclick="runStage('data_cleaning')">生成清洗方案</button>
+                    </div>
+                    <div id="cleaning-proposal"></div>
+                    <div id="cleaning-actions"></div>
+                </div>
+
+                <!-- 特征工程面板 -->
+                <div class="panel" id="panel-feature">
+                    <h2>特征工程</h2>
+                    <div id="feature-content">
+                        <button class="btn" onclick="runStage('feature_engineering')">生成特征工程方案</button>
+                    </div>
+                    <div id="feature-proposal"></div>
+                    <div id="feature-actions"></div>
+                </div>
+
+                <!-- 模型训练面板 -->
+                <div class="panel" id="panel-model">
+                    <h2>模型训练</h2>
+                    <div id="model-content">
+                        <button class="btn" onclick="runStage('model_training')">生成建模方案</button>
+                    </div>
+                    <div id="model-proposal"></div>
+                    <div id="model-actions"></div>
+                </div>
+
+                <!-- 结果输出面板 -->
+                <div class="panel" id="panel-result">
+                    <h2>结果输出</h2>
+                    <div id="result-content">
+                        <h3>模型评估结果</h3>
+                        <div id="evaluation-results"></div>
+                        
+                        <h3 style="margin-top: 30px;">资产下载</h3>
+                        <div id="assets-list" class="assets-list"></div>
+                    </div>
+                </div>
+
+                <!-- 对话面板 -->
+                <div class="panel" id="panel-chat">
+                    <h2>智能助手</h2>
+                    <div class="chat-container">
+                        <div class="chat-messages" id="chat-messages"></div>
+                        <div class="chat-input">
+                            <input type="text" id="chat-input" placeholder="输入消息...">
+                            <button class="btn" onclick="sendMessage()">发送</button>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://localhost:8000';
+        let currentSessionId = '';
+        let currentConfirmationId = '';
+
+        // 显示状态消息
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('upload-status');
+            statusDiv.innerHTML = `<div class="status-message ${type}">${message}</div>`;
+        }
+
+        // 启动工作流
+        async function startWorkflow() {
+            const sessionId = document.getElementById('sessionId').value;
+            const dataPath = document.getElementById('dataPath').value;
+            const targetColumn = document.getElementById('targetColumn').value;
+            const taskType = document.getElementById('taskType').value;
+            const model = document.getElementById('model').value;
+
+            if (!sessionId || !dataPath || !targetColumn) {
+                showStatus('请填写所有必填字段', 'error');
+                return;
+            }
+
+            currentSessionId = sessionId;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/workflow/start`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        data_path: dataPath,
+                        target_column: targetColumn,
+                        task_type: taskType,
+                        model: model
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('工作流已启动', 'success');
+                    updateStepStatus(2);
+                    showPanel('panel-cleaning');
+                } else {
+                    showStatus(data.message || '启动失败', 'error');
+                }
+            } catch (error) {
+                showStatus('请求失败: ' + error.message, 'error');
+            }
+        }
+
+        // 运行阶段
+        async function runStage(stage) {
+            if (!currentSessionId) {
+                showStatus('请先启动工作流', 'error');
+                return;
+            }
+
+            const contentDiv = document.getElementById(`${stage.replace('_', '-')}-content`);
+            contentDiv.innerHTML = '<div class="loading"><div class="loading-spinner"></div>正在生成方案...</div>';
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/workflow/${currentSessionId}/stage/${stage}/run`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    displayProposal(stage, data.proposal);
+                    currentConfirmationId = data.confirmation_id || '';
+                } else {
+                    contentDiv.innerHTML = `<div class="status-message error">生成失败: ${data.error}</div>`;
+                }
+            } catch (error) {
+                contentDiv.innerHTML = `<div class="status-message error">请求失败: ${error.message}</div>`;
+            }
+        }
+
+        // 显示方案
+        function displayProposal(stage, proposal) {
+            const proposalDiv = document.getElementById(`${stage.replace('_', '-')}-proposal`);
+            const actionsDiv = document.getElementById(`${stage.replace('_', '-')}-actions`);
+
+            // 渲染 Markdown
+            proposalDiv.innerHTML = `
+                <div class="markdown-content">
+                    ${marked.parse(proposal)}
+                </div>
+                <div class="skills-reference">
+                    <h4>参考的 Skills</h4>
+                    <p>本方案参考了以下专业知识库：</p>
+                    <ul>
+                        ${stage === 'data_cleaning' ? 
+                            '<li>data-analysis-1.0.2 (techniques.md, pitfalls.md)</li>' :
+                          stage === 'feature_engineering' ?
+                            '<li>afrexai-ml-engineering-1.0.0 (Phase 2: Data Engineering)</li>' :
+                            '<li>afrexai-ml-engineering-1.0.0 (Phase 3: Model Selection)</li>'
+                        }
+                    </ul>
+                </div>
+            `;
+
+            // 高亮代码块
+            proposalDiv.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightBlock(block);
+            });
+
+            // 显示确认操作
+            actionsDiv.innerHTML = `
+                <div class="confirmation-actions">
+                    <button class="btn btn-success" onclick="submitConfirmation('confirmed')">确认执行</button>
+                    <button class="btn btn-warning" onclick="submitConfirmation('modified')">修改方案</button>
+                    <button class="btn btn-secondary" onclick="submitConfirmation('skipped')">跳过此步骤</button>
+                </div>
+            `;
+
+            // 清空加载状态
+            document.getElementById(`${stage.replace('_', '-')}-content`).innerHTML = '';
+        }
+
+        // 提交确认
+        async function submitConfirmation(status) {
+            let modifications = null;
+            
+            if (status === 'modified') {
+                modifications = prompt('请输入您的修改要求:');
+                if (!modifications) return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/confirmation/submit`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        confirmation_id: currentConfirmationId,
+                        status: status,
+                        modifications: modifications
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // 根据当前阶段进入下一步
+                    const currentPanel = document.querySelector('.panel.active').id;
+                    if (currentPanel === 'panel-cleaning') {
+                        updateStepStatus(3);
+                        showPanel('panel-feature');
+                    } else if (currentPanel === 'panel-feature') {
+                        updateStepStatus(4);
+                        showPanel('panel-model');
+                    } else if (currentPanel === 'panel-model') {
+                        updateStepStatus(5);
+                        showPanel('panel-result');
+                        loadResults();
+                    }
+                }
+            } catch (error) {
+                showStatus('提交失败: ' + error.message, 'error');
+            }
+        }
+
+        // 更新步骤状态
+        function updateStepStatus(stepNumber) {
+            document.querySelectorAll('.step').forEach((step, index) => {
+                if (index < stepNumber - 1) {
+                    step.classList.add('completed');
+                    step.classList.remove('active');
+                } else if (index === stepNumber - 1) {
+                    step.classList.add('active');
+                    step.classList.remove('completed');
+                } else {
+                    step.classList.remove('active', 'completed');
+                }
+            });
+        }
+
+        // 显示面板
+        function showPanel(panelId) {
+            document.querySelectorAll('.panel').forEach(panel => {
+                panel.classList.remove('active');
+            });
+            document.getElementById(panelId).classList.add('active');
+        }
+
+        // 加载结果
+        async function loadResults() {
+            // 加载评估结果
+            try {
+                const response = await fetch(`${API_BASE_URL}/assets/${currentSessionId}/list`);
+                const data = await response.json();
+
+                const assetsListDiv = document.getElementById('assets-list');
+                let html = '';
+
+                for (const [type, assets] of Object.entries(data.assets)) {
+                    html += `<h4>${type}</h4>`;
+                    assets.forEach(asset => {
+                        html += `
+                            <div class="asset-item">
+                                <span>${asset.name}</span>
+                                <a href="${asset.url}" download>下载</a>
+                            </div>
+                        `;
+                    });
+                }
+
+                assetsListDiv.innerHTML = html || '<p>暂无资产</p>';
+            } catch (error) {
+                console.error('加载资产失败:', error);
+            }
+        }
+
+        // 生成报告
+        async function generateReport() {
+            if (!currentSessionId) {
+                showStatus('请先启动工作流', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/report/generate?session_id=${currentSessionId}`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('报告已生成', 'success');
+                    // 显示下载链接
+                    showPanel('panel-result');
+                    loadResults();
+                }
+            } catch (error) {
+                showStatus('生成报告失败: ' + error.message, 'error');
+            }
+        }
+
+        // 生成全流程脚本
+        async function generatePipeline() {
+            if (!currentSessionId) {
+                showStatus('请先启动工作流', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/pipeline/generate?session_id=${currentSessionId}`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('全流程脚本已生成', 'success');
+                    showPanel('panel-result');
+                    loadResults();
+                }
+            } catch (error) {
+                showStatus('生成脚本失败: ' + error.message, 'error');
+            }
+        }
+
+        // 发送消息
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+
+            if (!message) return;
+
+            // 添加用户消息
+            addChatMessage(message, 'user');
+            input.value = '';
+
+            if (!currentSessionId) {
+                addChatMessage('请先启动工作流', 'assistant');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        message: message
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    addChatMessage(data.response, 'assistant');
+                } else {
+                    addChatMessage('请求失败', 'assistant');
+                }
+            } catch (error) {
+                addChatMessage('请求失败: ' + error.message, 'assistant');
+            }
+        }
+
+        // 添加聊天消息
+        function addChatMessage(message, role) {
+            const messagesDiv = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${role}`;
+            messageDiv.textContent = message;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // 监听回车键
+        document.getElementById('chat-input')?.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 生成随机会话ID
+            document.getElementById('sessionId').value = 'session_' + Date.now();
+        });
+    </script>
+</body>
+</html>

@@ -1,7 +1,0 @@
-llm:
-  base_url: "https://api.moonshot.cn"
-  api_key: "sk-owzJCshJL25ysNHOWcgwjND8I53AoiTarpB3XeHl33TYjSPt"
-  model: "kimi-k2-0905-preview"
-  temperature: 0
-  timeout: 60
-  max_retries: 3

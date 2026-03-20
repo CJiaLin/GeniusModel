@@ -1,0 +1,303 @@
+# AutoML ReAct Prompts Configuration
+# 所有 Agent 的 Prompt 模板配置
+
+# 数据清洗 Agent 的 Prompts
+data_cleaning:
+  system_prompt: |
+    你是一位专业的数据清洗专家。
+
+    你的职责：
+    1. 分析数据质量问题（缺失值、异常值、重复值等）
+    2. 生成数据清洗方案
+    3. 编写清洗代码
+    4. 执行清洗并验证结果
+
+    请基于数据分析和最佳实践，生成详细的清洗方案。
+
+  plan_generation: |
+    请为以下数据生成详细的清洗方案：
+
+    数据路径: {data_path}
+
+    {skill_content}
+
+    请生成 Markdown 格式的清洗方案，包括：
+    1. 数据质量问题分析
+    2. 清洗步骤
+    3. 预期效果
+
+  code_generation: |
+    基于以下清洗方案，生成 Python 代码预览：
+
+    {plan}
+
+    请生成简洁的代码预览（仅展示主要步骤）。
+
+  code_generation_full: |
+    基于以下清洗方案，生成完整的 Python 代码：
+
+    数据路径: {data_path}
+
+    清洗方案:
+    {plan}
+
+    {modifications}
+
+    要求：
+    1. 使用 pandas 进行数据处理
+    2. 包含详细的注释
+    3. 保存清洗后的数据到指定路径
+    4. 返回清洗结果统计
+
+    请生成完整的、可执行的 Python 代码。
+
+# 特征工程 Agent 的 Prompts
+feature_engineering:
+  system_prompt: |
+    你是一位专业的特征工程专家。
+
+    你的职责：
+    1. 分析数据特征
+    2. 生成特征工程方案
+    3. 编写特征工程代码
+    4. 执行特征工程并验证结果
+
+    请基于数据特征和最佳实践，生成详细的特征工程方案。
+
+  plan_generation: |
+    请为以下数据生成详细的特征工程方案：
+
+    数据路径: {data_path}
+    目标列: {target_column}
+    任务类型: {task_type}
+
+    {skill_content}
+
+    请生成 Markdown 格式的特征工程方案，包括：
+    1. 现有特征分析
+    2. 特征工程策略
+    3. 要生成的新特征列表
+    4. 预期效果
+
+  code_generation: |
+    基于以下特征工程方案，生成 Python 代码预览：
+
+    {plan}
+
+    请生成简洁的代码预览（仅展示主要步骤）。
+
+  code_generation_full: |
+    基于以下特征工程方案，生成完整的 Python 代码：
+
+    数据路径: {data_path}
+    目标列: {target_column}
+    任务类型: {task_type}
+
+    特征工程方案:
+    {plan}
+
+    {modifications}
+
+    要求：
+    1. 使用 pandas 和 scikit-learn 进行特征工程
+    2. 包含详细的注释
+    3. 保存特征工程后的数据到指定路径
+    4. 返回新生成的特征列表
+
+    请生成完整的、可执行的 Python 代码。
+
+# 模型训练 Agent 的 Prompts
+model_training:
+  system_prompt: |
+    你是一位专业的机器学习专家。
+
+    你的职责：
+    1. 分析数据和任务类型
+    2. 推荐合适的模型和参数
+    3. 编写模型训练代码
+    4. 训练模型并评估性能
+
+    请基于数据特征和最佳实践，生成详细的建模方案。
+
+  plan_generation: |
+    请为以下数据生成详细的建模方案：
+
+    数据路径: {data_path}
+    目标列: {target_column}
+    任务类型: {task_type}
+
+    {skill_content}
+
+    请生成 Markdown 格式的建模方案，包括：
+    1. 任务分析
+    2. 推荐的模型及理由
+    3. 模型参数设置
+    4. 评估指标
+    5. 预期效果
+
+  code_generation: |
+    基于以下建模方案，生成 Python 代码预览：
+
+    {plan}
+
+    请生成简洁的代码预览（仅展示主要步骤）。
+
+  code_generation_full: |
+    基于以下建模方案，生成完整的 Python 代码：
+
+    数据路径: {data_path}
+    目标列: {target_column}
+    任务类型: {task_type}
+
+    建模方案:
+    {plan}
+
+    {modifications}
+
+    要求：
+    1. 使用 scikit-learn 进行模型训练
+    2. 包含数据划分、模型训练、评估
+    3. 保存训练好的模型到指定路径
+    4. 返回模型性能指标
+    5. 包含详细的注释
+
+    请生成完整的、可执行的 Python 代码。
+
+# 数据分析 Agent 的 Prompts
+data_analysis:
+  system_prompt: |
+    你是一位专业的数据分析师。
+
+    你的职责：
+    1. 分析数据结构和特征
+    2. 识别数据质量问题
+    3. 生成数据概览报告
+    4. 提供数据洞察和建议
+
+    请基于数据分析最佳实践，生成详细的分析报告。
+
+  analysis_prompt: |
+    请分析以下数据文件：
+
+    数据路径: {data_path}
+
+    {skill_content}
+
+    请生成包含以下内容的数据分析报告：
+    1. 数据基本信息（行数、列数、数据类型）
+    2. 各列的统计描述
+    3. 缺失值分析
+    4. 异常值检测
+    5. 数据质量评估
+    6. 改进建议
+
+# ReAct Agent 基础 Prompts
+react_agent:
+  system_prompt: |
+    你是一个智能助手，可以使用工具来解决复杂问题。
+
+    可用工具：
+    {tools_description}
+
+    请按照以下格式进行思考和行动：
+
+    Thought: 你的思考过程
+    Action: 工具名称
+    Action Input: 工具的输入参数（JSON格式）
+    Observation: 工具执行结果
+
+    当你获得足够信息时，给出最终答案：
+    Final Answer: 你的最终答案
+
+  action_format: |
+    可用的工具：
+    {tools}
+
+    请使用以下格式之一：
+
+    1. 需要调用工具时：
+    Thought: [你的思考]
+    Action: [工具名称]
+    Action Input: [JSON格式的输入]
+
+    2. 获得最终结果时：
+    Thought: [你的思考]
+    Final Answer: [最终答案]
+
+# 报告生成 Prompts
+report_generation:
+  system_prompt: |
+    你是一位专业的数据科学报告撰写专家。
+
+    你的职责：
+    1. 整理建模流程的各个阶段结果
+    2. 生成结构化的分析报告
+    3. 提供可视化建议
+    4. 总结关键发现和结论
+
+  report_template: |
+    # AutoML 建模分析报告
+
+    ## 1. 项目概述
+
+    - **会话ID**: {session_id}
+    - **生成时间**: {timestamp}
+    - **数据路径**: {data_path}
+    - **目标列**: {target_column}
+    - **任务类型**: {task_type}
+
+    ## 2. 数据概览
+
+    {data_overview}
+
+    ## 3. 数据清洗
+
+    {cleaning_section}
+
+    ## 4. 特征工程
+
+    {feature_section}
+
+    ## 5. 模型训练与评估
+
+    {model_section}
+
+    ## 6. 结论与建议
+
+    {conclusion}
+
+# 全流程 Pipeline Prompts
+full_pipeline:
+  system_prompt: |
+    你是一位 AutoML 全流程专家，能够协调完成从数据清洗到模型训练的完整流程。
+
+    你的职责：
+    1. 分析数据并识别问题
+    2. 生成数据清洗方案
+    3. 生成特征工程方案
+    4. 生成建模方案
+    5. 整合所有步骤生成完整 Pipeline 代码
+
+  pipeline_generation: |
+    请基于以下信息生成完整的建模 Pipeline Python 脚本：
+
+    数据路径: {data_path}
+    目标列: {target_column}
+    任务类型: {task_type}
+
+    数据清洗方案:
+    {cleaning_plan}
+
+    特征工程方案:
+    {feature_plan}
+
+    建模方案:
+    {model_plan}
+
+    要求：
+    1. 生成一个完整的、可独立运行的 Python 脚本
+    2. 包含数据加载、清洗、特征工程、模型训练、评估的完整流程
+    3. 使用函数封装各个阶段
+    4. 包含主函数入口
+    5. 添加详细的注释
+    6. 保存所有中间结果和最终模型

@@ -1,0 +1,7 @@
+{
+  "success": false,
+  "features_data_path": null,
+  "original_path": "/Users/cjialin/code/AutoMLByLLM/train.csv",
+  "timestamp": "2026-03-19T19:45:07.439459",
+  "stage": "feature_engineering"
+}

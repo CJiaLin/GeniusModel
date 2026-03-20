@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+AutoML 全流程建模脚本
+
+生成时间: 2026-03-19 18:07:54
+会话ID: train_csv_v3_1773914239
+
+使用说明:
+1. 确保已安装依赖: pip install pandas scikit-learn joblib
+2. 运行脚本: python pipeline.py
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import json
+
+# 配置
+DATA_PATH = "/Users/cjialin/code/AutoMLByLLM/train.csv"
+TARGET_COLUMN = "SalePrice"
+TASK_TYPE = "regression"
+OUTPUT_DIR = Path("output")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+print("=" * 60)
+print("AutoML 全流程建模")
+print("=" * 60)
+print(f"数据路径: {DATA_PATH}")
+print(f"目标列: {TARGET_COLUMN}")
+print(f"任务类型: {TASK_TYPE}")
+print()
+
+
+# ============================================
+# 阶段 1: 数据清洗
+# ============================================
+print("\n[阶段 1] 数据清洗...")
+
+```json
+{
+    "thinking": "根据用户提供的实际数据信息（1460行×81列的房价数据），而非清洗方案中的泰坦尼克号示例数据，我需要编写针对以下列的清洗代码：\n\n数值列: Id, MSSubClass, LotFrontage, LotArea, OverallQual, OverallCond, YearBuilt, YearRemodAdd, MasVnrArea, BsmtFinSF1, BsmtFinSF2, BsmtUnfSF, TotalBsmtSF, 1stFlrSF, 2ndFlrSF\n分类列: MSZoning, Street, Alley, LotShape, LandContour, Utilities, LotConfig, LandSlope, Neighborhood, Condition1, Condition2, BldgType, HouseStyle, RoofStyle, RoofMatl\n缺失值列: LotFrontage, Alley, MasVnrType, MasVnrArea, BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1, BsmtFinType2, Electrical\n\n清洗策略：\n1. 缺失值处理：数值型用中位数/0填充，分类型用'None'或众数填充\n2. 类型转换：MSSubClass转为字符串（分类），OverallQual/OverallCond转为有序分类\n3. 特征工程：创建房屋年龄、总面积、是否有地下室等特征\n4. 异常值处理：使用IQR方法截断\n5. 编码：对分类变量进行One-Hot编码\n6. 保存结果到指定路径\n\n特别注意修复上次语法错误（EOL while scanning string literal），确保所有字符串正确闭合，避免未闭合的f-string。",
+    "code": "import pandas as pd\nimport numpy as np\nfrom sklearn.impute import SimpleImputer\nimport warnings\nwarnings.filterwarnings('ignore')\n\n# 设置文件路径\ninput_path = '/Users/cjialin/code/AutoMLByLLM/train.csv'\noutput_path = '/Users/cjialin/code/AutoMLByLLM/train_cleaned.csv'\n\nprint(\"开始加载数据...\")\ndf = pd.read_csv(input_path)\noriginal_shape = df.shape\nprint(f\"原始数据形状: {original_shape}\")\n\n# 1. 处理缺失值\nprint(\"处理缺失值...\")\n\n# 1.1 数值型缺失值处理\nif 'LotFrontage' in df.columns:\n    df['LotFrontage'].fillna(df['LotFrontage'].median(), inplace=True)\n    print(\"  - LotFrontage: 使用中位数填充\")\n\nif 'MasVnrArea' in df.columns:\n    df['MasVnrArea'].fillna(0, inplace=True)\n    print(\"  - MasVnrArea: 使用0填充\")\n\n# 1.2 分类型缺失值处理\ncat_missing_dict = {\n    'Alley': 'None',\n    'MasVnrType': 'None',\n    'BsmtQual': 'None',\n    'BsmtCond': 'None',\n    'BsmtExposure': 'None',\n    'BsmtFinType1': 'None',\n    'BsmtFinType2': 'None'\n}\n\nfor col, fill_val in cat_missing_dict.items():\n    if col in df.columns:\n        df[col].fillna(fill_val, inplace=True)\n        print(f\"  - {col}: 使用'{fill_val}'填充\")\n\nif 'Electrical' in df.columns:\n    mode_val = df['Electrical'].mode()[0] if not df['Electrical'].mode().empty else 'SBrkr'\n    df['Electrical'].fillna(mode_val, inplace=True)\n    print(f\"  - Electrical: 使用众数'{mode_val}'填充\")\n\n# 2. 数据类型转换\nprint(\"转换数据类型...\")\n\n# MSSubClass是分类变量（建筑类型代码）\nif 'MSSubClass' in df.columns:\n    df['MSSubClass'] = df['MSSubClass'].astype(str)\n    print(\"  - MSSubClass: 转换为字符串类型\")\n\n# OverallQual和OverallCond转换为有序分类\nqual_cols = ['OverallQual', 'OverallCond']\nfor col in qual_cols:\n    if col in df.columns:\n        df[col] = pd.Categorical(df[col], categories=range(1, 11), ordered=True)\n        print(f\"  - {col}: 转换为有序分类\")\n\n# 3. 特征工程\nprint(\"创建新特征...\")\n\n# 房屋年龄相关特征\nif 'YearBuilt' in df.columns:\n    current_year = 2024\n    df['HouseAge'] = current_year - df['YearBuilt']\n    df['IsNewHouse'] = (df['YearBuilt'] >= 2000).astype(int)\n    print(\"  - 创建特征: HouseAge, IsNewHouse\")\n\n# 翻新相关特征\nif 'YearRemodAdd' in df.columns and 'YearBuilt' in df.columns:\n    df['RemodAge'] = 2024 - df['YearRemodAdd']\n    df['IsRemodeled'] = (df['YearRemodAdd'] != df['YearBuilt']).astype(int)\n    df['YearsSinceRemod'] = df['YearRemodAdd'] - df['YearBuilt']\n    print(\"  - 创建特征: RemodAge, IsRemodeled, YearsSinceRemod\")\n\n# 总面积计算\narea_cols = ['TotalBsmtSF', '1stFlrSF', '2ndFlrSF']\navailable_area_cols = [col for col in area_cols if col in df.columns]\nif available_area_cols:\n    df['TotalSF'] = df[available_area_cols].sum(axis=1)\n    print(f\"  - 创建特征: TotalSF (基于{available_area_cols})\")\n\n# 地下室特征\nif 'TotalBsmtSF' in df.columns:\n    df['HasBasement'] = (df['TotalBsmtSF'] > 0).astype(int)\n    print(\"  - 创建特征: HasBasement\")\n\n# 浴室总数（如果存在相关列）\nbath_cols = ['FullBath', 'HalfBath', 'BsmtFullBath', 'BsmtHalfBath']\navailable_bath_cols = [col for col in bath_cols if col in df.columns]\nif available_bath_cols:\n    df['TotalBath'] = df[available_bath_cols].sum(axis=1)\n    print(f\"  - 创建特征: TotalBath\")\n\n# 4. 异常值处理\nprint(\"处理异常值...\")\nnum_cols = df.select_dtypes(include=[np.number]).columns\noutlier_count = 0\nfor col in num_cols:\n    if col != 'Id':\n        Q1 = df[col].quantile(0.25)\n        Q3 = df[col].quantile(0.75)\n        IQR = Q3 - Q1\n        lower_bound = Q1 - 1.5 * IQR\n        upper_bound = Q3 + 1.5 * IQR\n        \n        # 统计异常值数量\n        outliers = ((df[col] < lower_bound) | (df[col] > upper_bound)).sum()\n        if outliers > 0:\n            outlier_count += 1\n            # 截断处理\n            df[col] = df[col].clip(lower=lower_bound, upper=upper_bound)\n\nprint(f\"  - 处理了{outlier_count}个数值列的异常值\")\n\n# 5. 编码处理\nprint(\"编码分类变量...\")\ncategorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()\nprint(f\"  - 发现{len(categorical_cols)}个分类列\")\n\n# 使用One-Hot编码\ndf_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True)\nprint(f\"  - One-Hot编码后特征数: {df_encoded.shape[1]}\")\n\n# 6. 最终验证\nprint(\"验证清洗结果...\")\nremaining_missing = df_encoded.isnull().sum().sum()\nprint(f\"  - 剩余缺失值: {remaining_missing}\")\n\n# 7. 保存清洗后的数据\ndf_encoded.to_csv(output_path, index=False)\nprint(f\"数据已保存至: {output_path}\")\n\n# 8. 打印统计摘要\nprint(\"\\n\" + \"=\"*50)\nprint(\"清洗结果统计\")\nprint(\"=\"*50)\nprint(f\"原始数据形状: {original_shape}\")\nprint(f\"清洗后数据形状: {df_encoded.shape}\")\nprint(f\"新增特征数量: {df_encoded.shape[1] - original_shape[1]}\")\nprint(f\"处理缺失值列: 10列\")\nprint(f\"分类变量编码: {len(categorical_cols)}列
+print("✓ 数据清洗完成")
+
+
+# ============================================
+# 保存结果
+# ============================================
+print("\n" + "=" * 60)
+print("建模完成!")
+print("=" * 60)
+
+# 保存结果摘要
+summary = {
+    "data_path": DATA_PATH,
+    "target_column": TARGET_COLUMN,
+    "task_type": TASK_TYPE,
+    "output_dir": str(OUTPUT_DIR),
+    "timestamp": pd.Timestamp.now().isoformat()
+}
+
+with open(OUTPUT_DIR / "summary.json", "w", encoding="utf-8") as f:
+    json.dump(summary, f, ensure_ascii=False, indent=2)
+
+print(f"\n结果已保存到: {{OUTPUT_DIR}}")
+print("\n文件列表:")
+for file in OUTPUT_DIR.iterdir():
+    print(f"  - {{file.name}}")

@@ -1,0 +1,1 @@
+{"model_type":"GradientBoostingRegressor","rmse":24602.3756832781,"mae":16002.1671019425,"r2":0.9210885075,"r2_adjusted":0.8911694582,"cv_rmse":27404.4296920064,"cv_std":4271.7574926412,"n_features":79,"n_samples":1460}

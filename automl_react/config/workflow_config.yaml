@@ -1,0 +1,67 @@
+# Workflow Configuration
+# 工作流配置
+
+# ReAct Agent 配置
+react_agent:
+  max_iterations: 10
+  verbose: false
+  timeout: 300
+
+# 工作流阶段配置
+stages:
+  data_upload:
+    required: true
+    description: "数据上传阶段"
+  
+  data_analysis:
+    required: true
+    description: "数据分析阶段"
+    skills:
+      - "data-analysis-1.0.2"
+  
+  data_cleaning:
+    required: false
+    description: "数据清洗阶段"
+    skills:
+      - "data-analysis-1.0.2"
+    confirmation_required: true
+  
+  feature_engineering:
+    required: false
+    description: "特征工程阶段"
+    skills:
+      - "afrexai-ml-engineering-1.0.0"
+    confirmation_required: true
+  
+  model_training:
+    required: true
+    description: "模型训练阶段"
+    skills:
+      - "afrexai-ml-engineering-1.0.0"
+      - "ml-model-eval-benchmark-0.1.0"
+    confirmation_required: true
+  
+  model_evaluation:
+    required: true
+    description: "模型评估阶段"
+    skills:
+      - "ml-model-eval-benchmark-0.1.0"
+
+# 确认点配置
+confirmation:
+  timeout: 3600  # 确认超时时间（秒）
+  auto_skip: false  # 是否自动跳过确认
+  default_action: "confirm"  # 默认动作: confirm, modify, skip
+
+# 资产保存配置
+assets:
+  save_intermediate: true  # 保存中间结果
+  save_code: true  # 保存生成的代码
+  save_models: true  # 保存训练好的模型
+  save_reports: true  # 保存报告
+
+# 日志配置
+logging:
+  level: "INFO"
+  save_llm_calls: true
+  save_workflow_transitions: true
