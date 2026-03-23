@@ -467,7 +467,7 @@ class DataCleaningAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
 
-        cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
+        self.cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
         
         task_prompt = f"""基于以下清洗方案，生成简洁的 Python 代码：
 
@@ -481,7 +481,7 @@ class DataCleaningAgent(ReActAgent):
 
 要求：
 1. 使用 pandas 进行数据处理
-2. 保存清洗后的数据到指定路径: {cleaned_data_path}
+2. 保存清洗后的数据到指定路径: {self.cleaned_data_path}
 3. 只做数据清洗，不生成其他特征
 4. 返回清洗结果统计
 5. 代码必须完整可执行，包含所有必要的导入语句
@@ -496,7 +496,7 @@ class DataCleaningAgent(ReActAgent):
         # 准备执行上下文
         context = {
             "data_path": self.data_path,
-            "cleaned_data_path": cleaned_data_path
+            "cleaned_data_path": self.cleaned_data_path
         }
 
         # 生成代码并执行验证
@@ -504,7 +504,7 @@ class DataCleaningAgent(ReActAgent):
             task_prompt=task_prompt,
             context=context,
             required_outputs=[],
-            required_filepath=cleaned_data_path
+            required_filepath=self.cleaned_data_path
         )
 
         if result.success:
@@ -550,26 +550,24 @@ class DataCleaningAgent(ReActAgent):
         # 使用代码生成器执行代码
         code_gen = CodeGenerator()
 
-        # 临时输出路径（在原始数据目录）
-        temp_cleaned_path = self.data_path.replace('.csv', '_cleaned.csv')
 
         context = {
             "data_path": self.data_path,
-            "cleaned_data_path": temp_cleaned_path
+            "cleaned_data_path": self.cleaned_data_path
         }
 
         exec_result = code_gen.execute_code(cleaning_code, context)
 
         # 检查是否成功生成了清洗后的数据文件
         import os
-        file_exists = os.path.exists(temp_cleaned_path)
+        file_exists = os.path.exists(self.cleaned_data_path)
 
         # 将清洗后的数据复制到 session 目录
         final_cleaned_path = None
         if file_exists:
-            session_cleaned_path = self.asset_manager.session_dir / "data" / "cleaned_data.csv"
+            session_cleaned_path = self.cleaned_data_path
             session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(temp_cleaned_path, session_cleaned_path)
+            shutil.copy2(self.cleaned_data_path, session_cleaned_path)
             final_cleaned_path = str(session_cleaned_path)
             print(f"[Agent] 清洗后数据已复制到 session 目录: {final_cleaned_path}")
             # 删除临时文件
