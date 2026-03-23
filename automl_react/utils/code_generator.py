@@ -58,26 +58,20 @@ class CodeGenerator:
         Returns:
             CodeGenerationResult 包含 thinking 和 code
         """
-        # 构建结构化输出提示词 - 使用 markdown 代码块格式，更可靠
+        # 构建代码生成提示词 - 只输出代码，不输出思考
         structured_prompt = f"""{prompt}
 
-重要：请按以下格式返回结果：
+重要：你只需要输出 Python 代码，不要输出任何思考内容或解释。
 
-## 思考过程
-[你的分析、设计思路]
-
-## Python代码
-```python
-# 完整的、可执行的 Python 代码
-# 确保代码完整，不要省略任何部分
-```
+直接输出代码，用 ```python 和 ``` 包围。
 
 要求：
-1. 代码必须完整、可执行，不要省略任何部分
-2. 代码块必须用 ```python 和 ``` 包围
-3. 确保所有括号、引号都正确闭合
-4. 如果代码需要保存文件，请使用绝对路径
-5. 代码末尾必须有完整的结束
+1. 只输出代码，不要有任何文字说明
+2. 代码必须完整、可执行，不要省略任何部分
+3. 代码块必须用 ```python 和 ``` 包围
+4. 确保所有括号、引号都正确闭合
+5. 如果代码需要保存文件，请使用绝对路径
+6. 代码末尾必须有完整的结束
 """
         
         try:
@@ -99,19 +93,12 @@ class CodeGenerator:
             
             print()  # 换行
             
-            # 优先尝试提取 markdown 代码块（更可靠）
+            # 提取代码
             code = self._extract_code_fallback(full_response)
-            thinking = ""
-            
-            # 尝试提取思考过程
-            import re
-            thinking_match = re.search(r'##\s*思考过程\s*\n(.*?)(?=##\s*Python代码|```python|$)', full_response, re.DOTALL)
-            if thinking_match:
-                thinking = thinking_match.group(1).strip()
             
             if code.strip():
                 return CodeGenerationResult(
-                    thinking=thinking or '从 markdown 代码块中提取代码',
+                    thinking='',
                     code=code,
                     success=True
                 )
