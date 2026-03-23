@@ -313,7 +313,7 @@ class FeatureEngineeringAgent(ReActAgent):
 
     def generate_feature_code(self, modifications: str = None) -> str:
         """
-        生成特征工程代码（使用结构化输出和迭代验证）
+        生成特征工程代码（使用 CodeAct 模式）
 
         Args:
             modifications: 用户修改内容
@@ -324,7 +324,7 @@ class FeatureEngineeringAgent(ReActAgent):
         if not self.feature_plan:
             raise ValueError("请先生成特征工程方案")
 
-        from ..utils.code_generator import CodeGenerator
+        from ..utils.codeact_agent import CodeActAgent
 
         modifications_text = f"\n用户修改要求:\n{modifications}\n" if modifications else ""
 
@@ -342,7 +342,7 @@ class FeatureEngineeringAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
 
-        prompt = f"""基于以下特征工程方案，生成完整的 Python 代码：
+        task_prompt = f"""基于以下特征工程方案，生成完整的 Python 代码：
 
 数据路径: {self.data_path}
 目标列: {self.target_column}
@@ -365,8 +365,8 @@ class FeatureEngineeringAgent(ReActAgent):
 请生成完整的、可执行的 Python 代码。
 """
 
-        # 使用代码生成器生成并验证代码
-        code_gen = CodeGenerator(llm=self.llm)
+        # 使用 CodeActAgent 生成并执行代码
+        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300)
 
         context = {
             "data_path": self.data_path,
@@ -375,37 +375,37 @@ class FeatureEngineeringAgent(ReActAgent):
             "feature_data_path": self.data_path.replace('.csv', '_features.csv')
         }
 
-        # 生成代码并验证执行
-        code, exec_result = code_gen.generate_code_with_validation(
-            prompt=prompt,
+        # 生成代码并执行验证
+        result = codeact.generate_and_execute(
+            task_prompt=task_prompt,
             context=context,
-            stage="feature_engineering_code",
             required_outputs=[]
         )
 
-        print(f"[Agent] 代码生成结果: code长度={len(code)}, exec_success={exec_result.success}")
-        if not exec_result.success:
-            print(f"[Agent] 执行错误: {exec_result.error}")
-
-        self.feature_code = code
-
-        # 保存代码到资产
-        if code:
-            self.asset_manager.save_code(
-                code=code,
-                filename="feature_engineering.py",
-                metadata={
-                    "stage": "feature_engineering",
-                    "data_path": self.data_path,
-                    "target_column": self.target_column,
-                    "task_type": self.task_type,
-                    "execution_success": exec_result.success,
-                    "execution_error": exec_result.error,
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-
-        return self.feature_code
+        if result.success:
+            self.feature_code = result.code
+            print(f"\n[CodeAct] 代码生成成功，迭代次数: {result.iterations}")
+            
+            # 保存代码到资产
+            if self.feature_code:
+                self.asset_manager.save_code(
+                    code=self.feature_code,
+                    filename="feature_engineering.py",
+                    metadata={
+                        "stage": "feature_engineering",
+                        "data_path": self.data_path,
+                        "target_column": self.target_column,
+                        "task_type": self.task_type,
+                        "execution_success": True,
+                        "iterations": result.iterations,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+            
+            return self.feature_code
+        else:
+            print(f"\n[CodeAct] 代码生成失败: {result.error}")
+            raise ValueError(f"代码生成失败: {result.error}")
 
     def execute_feature_engineering(self, code: str = None) -> Dict[str, Any]:
         """

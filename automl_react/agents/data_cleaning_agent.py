@@ -434,7 +434,7 @@ class DataCleaningAgent(ReActAgent):
 
     def generate_cleaning_code(self, modifications: str = None) -> str:
         """
-        生成清洗代码（使用结构化输出和迭代验证）
+        生成清洗代码（使用 CodeAct 模式）
 
         Args:
             modifications: 用户修改内容
@@ -445,7 +445,7 @@ class DataCleaningAgent(ReActAgent):
         if not self.cleaning_plan:
             raise ValueError("请先生成清洗方案")
 
-        from ..utils.code_generator import CodeGenerator
+        from ..utils.codeact_agent import CodeActAgent
 
         # 构建提示词
         modifications_text = f"\n用户修改要求:\n{modifications}\n" if modifications else ""
@@ -467,7 +467,7 @@ class DataCleaningAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
 
-        prompt = f"""基于以下清洗方案，生成完整的 Python 代码：
+        task_prompt = f"""基于以下清洗方案，生成完整的 Python 代码：
 
 数据路径: {self.data_path}
 {data_info_text}
@@ -488,8 +488,8 @@ class DataCleaningAgent(ReActAgent):
 请生成完整的、可执行的 Python 代码。
 """
 
-        # 使用代码生成器生成并验证代码
-        code_gen = CodeGenerator(llm=self.llm)
+        # 使用 CodeActAgent 生成并执行代码
+        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300)
 
         # 准备执行上下文
         context = {
@@ -497,15 +497,20 @@ class DataCleaningAgent(ReActAgent):
             "cleaned_data_path": self.data_path.replace('.csv', '_cleaned.csv')
         }
 
-        # 生成代码并验证执行
-        code, exec_result = code_gen.generate_code_with_validation(
-            prompt=prompt,
+        # 生成代码并执行验证
+        result = codeact.generate_and_execute(
+            task_prompt=task_prompt,
             context=context,
-            stage="data_cleaning_code",
-            required_outputs=[]  # 数据清洗不强制要求特定输出变量
+            required_outputs=[]
         )
 
-        self.cleaning_code = code
+        if result.success:
+            self.cleaning_code = result.code
+            print(f"\n[CodeAct] 代码生成成功，迭代次数: {result.iterations}")
+            return self.cleaning_code
+        else:
+            print(f"\n[CodeAct] 代码生成失败: {result.error}")
+            raise ValueError(f"代码生成失败: {result.error}")
 
         # 保存代码到资产
         if code:

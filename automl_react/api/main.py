@@ -676,7 +676,7 @@ async def submit_confirmation(request: UserConfirmationRequest):
 
 
 async def execute_data_cleaning(session: Dict, data_path: str, modifications: Optional[str] = None) -> Dict:
-    """执行数据清洗"""
+    """执行数据清洗（CodeAct 模式）"""
     import shutil
     
     print(f"[API] ========== 开始执行数据清洗 ==========")
@@ -696,52 +696,42 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
     else:
         print(f"[API] 清洗方案已存在，长度: {len(agent.cleaning_plan)} 字符")
 
-    # 生成清洗代码
-    print(f"[API] 开始生成清洗代码...")
+    # 使用 CodeAct 模式生成并执行代码
+    print(f"[API] 开始生成并执行清洗代码（CodeAct 模式）...")
     try:
+        # CodeAct 模式：generate_cleaning_code 已经包含执行验证
         code = agent.generate_cleaning_code(modifications)
-        print(f"[API] 清洗代码生成完成，长度: {len(code) if code else 0} 字符")
+        print(f"[API] 清洗代码生成并执行完成，长度: {len(code) if code else 0} 字符")
     except Exception as e:
-        print(f"[API] 清洗代码生成失败: {str(e)}")
+        print(f"[API] 清洗代码生成执行失败: {str(e)}")
         import traceback
         traceback.print_exc()
         raise
-
-    # 执行代码
-    print(f"[API] 开始执行清洗代码...")
-    try:
-        result = agent.execute_cleaning(code)
-        print(f"[API] 清洗代码执行完成，结果: {result.get('success')}")
-    except Exception as e:
-        print(f"[API] 清洗代码执行失败: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise
-
-    # 如果清洗成功，将清洗后的数据复制到 session 目录（如果还没有在 session 目录）
-    if result.get("success") and result.get("cleaned_data_path"):
-        cleaned_path = Path(result["cleaned_data_path"])
+    
+    # 检查清洗后的数据文件
+    temp_cleaned_path = data_path.replace('.csv', '_cleaned.csv')
+    import os
+    file_exists = os.path.exists(temp_cleaned_path)
+    
+    # 将清洗后的数据复制到 session 目录
+    final_cleaned_path = None
+    if file_exists:
         session_cleaned_path = asset_manager.session_dir / "data" / "cleaned_data.csv"
-        
-        # 检查是否已经在 session 目录
-        if cleaned_path.resolve() == session_cleaned_path.resolve():
-            print(f"[API] 清洗后数据已在 session 目录: {cleaned_path}")
-        elif cleaned_path.exists():
-            session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(cleaned_path, session_cleaned_path)
-            print(f"[API] 清洗后数据已复制到: {session_cleaned_path}")
-            result["cleaned_data_path"] = str(session_cleaned_path)
-        else:
-            print(f"[API] 警告: 清洗后的数据文件不存在: {cleaned_path}")
+        session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(temp_cleaned_path, session_cleaned_path)
+        final_cleaned_path = str(session_cleaned_path)
+        print(f"[API] 清洗后数据已复制到 session 目录: {final_cleaned_path}")
+        # 删除临时文件
+        os.remove(temp_cleaned_path)
     else:
-        print(f"[API] 警告: 清洗未成功或未生成清洗后的数据")
-
+        print(f"[API] 警告: 清洗后的数据文件不存在: {temp_cleaned_path}")
+    
     # 构建执行结果
     execution_result = {
-        "success": result.get("success", False),
-        "cleaned_data_path": result.get("cleaned_data_path"),
-        "original_path": result.get("original_path"),
-        "timestamp": result.get("timestamp"),
+        "success": file_exists,
+        "cleaned_data_path": final_cleaned_path,
+        "original_path": data_path,
+        "timestamp": datetime.now().isoformat(),
         "stage": "data_cleaning"
     }
 
@@ -765,7 +755,7 @@ async def execute_feature_engineering(
     task_type: str,
     modifications: Optional[str] = None
 ) -> Dict:
-    """执行特征工程"""
+    """执行特征工程（CodeAct 模式）"""
     import shutil
     
     print(f"[API] ========== 开始执行特征工程 ==========")
@@ -785,48 +775,42 @@ async def execute_feature_engineering(
     else:
         print(f"[API] 特征工程方案已存在，长度: {len(agent.feature_plan)} 字符")
 
-    # 生成特征工程代码
-    print(f"[API] 开始生成特征工程代码...")
+    # 使用 CodeAct 模式生成并执行代码
+    print(f"[API] 开始生成并执行特征工程代码（CodeAct 模式）...")
     try:
+        # CodeAct 模式：generate_feature_code 已经包含执行验证
         code = agent.generate_feature_code(modifications)
-        print(f"[API] 特征工程代码生成完成，长度: {len(code) if code else 0} 字符")
+        print(f"[API] 特征工程代码生成并执行完成，长度: {len(code) if code else 0} 字符")
     except Exception as e:
-        print(f"[API] 特征工程代码生成失败: {str(e)}")
+        print(f"[API] 特征工程代码生成执行失败: {str(e)}")
         import traceback
         traceback.print_exc()
         raise
-
-    # 执行代码
-    print(f"[API] 开始执行特征工程代码...")
-    try:
-        result = agent.execute_feature_engineering(code)
-        print(f"[API] 特征工程代码执行完成，结果: {result.get('success')}")
-    except Exception as e:
-        print(f"[API] 特征工程代码执行失败: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise
-
-    # 如果特征工程成功，将特征工程后的数据复制到 session 目录
-    if result.get("success") and result.get("features_data_path"):
-        features_path = Path(result["features_data_path"])
-        if features_path.exists():
-            session_features_path = asset_manager.session_dir / "data" / "features_data.csv"
-            session_features_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(features_path, session_features_path)
-            print(f"[API] 特征工程后数据已复制到: {session_features_path}")
-            result["features_data_path"] = str(session_features_path)
-        else:
-            print(f"[API] 警告: 特征工程后的数据文件不存在: {features_path}")
+    
+    # 检查特征工程后的数据文件
+    temp_features_path = data_path.replace('.csv', '_features.csv')
+    import os
+    file_exists = os.path.exists(temp_features_path)
+    
+    # 将特征工程后的数据复制到 session 目录
+    final_features_path = None
+    if file_exists:
+        session_features_path = asset_manager.session_dir / "data" / "features_data.csv"
+        session_features_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(temp_features_path, session_features_path)
+        final_features_path = str(session_features_path)
+        print(f"[API] 特征工程后数据已复制到 session 目录: {final_features_path}")
+        # 删除临时文件
+        os.remove(temp_features_path)
     else:
-        print(f"[API] 警告: 特征工程未成功或未生成特征工程后的数据")
-
+        print(f"[API] 警告: 特征工程后的数据文件不存在: {temp_features_path}")
+    
     # 构建执行结果
     execution_result = {
-        "success": result.get("success", False),
-        "features_data_path": result.get("features_data_path"),
-        "original_path": result.get("original_path"),
-        "timestamp": result.get("timestamp"),
+        "success": file_exists,
+        "features_data_path": final_features_path,
+        "original_path": data_path,
+        "timestamp": datetime.now().isoformat(),
         "stage": "feature_engineering"
     }
 
@@ -839,7 +823,7 @@ async def execute_feature_engineering(
     )
     
     print(f"[API] ========== 特征工程执行完成 ==========")
-
+    
     return execution_result
 
 
