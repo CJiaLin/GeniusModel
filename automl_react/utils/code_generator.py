@@ -39,7 +39,9 @@ class CodeGenerator:
     
     def __init__(self, llm: Any = None):
         self.llm = llm
-        self.max_retries = 3
+        self.max_retries = 5  # 添加重试次数
+        self.retry_delay = 10  # 添加重试延迟（秒）
+        self.timeout = 600  # 添加超时时间（秒）
     
     def generate_code(
         self,
@@ -74,65 +76,89 @@ class CodeGenerator:
 6. 代码末尾必须有完整的结束
 """
         
-        try:
-            # 使用流式输出
-            print(f"[CodeGenerator] 开始流式生成代码...")
-            full_response = ""
-            
+        last_error = None
+        
+        for retry in range(self.max_retries):
             try:
-                for chunk in self.llm.stream(structured_prompt):
-                    if chunk.content:
-                        content = chunk.content
-                        full_response += content
-                        print(content, end="", flush=True)
-            except Exception as e:
-                # 如果流式输出失败，回退到同步调用
-                print(f"\n[CodeGenerator] 流式输出失败，回退到同步调用: {e}")
-                response = self.llm.invoke(structured_prompt)
-                full_response = response.content if hasattr(response, 'content') else str(response)
-            
-            print()  # 换行
-            
-            # 提取代码
-            code = self._extract_code_fallback(full_response)
-            
-            if code.strip():
-                return CodeGenerationResult(
-                    thinking='',
-                    code=code,
-                    success=True
-                )
-            
-            # 如果 markdown 提取失败，尝试 JSON 解析
-            result = self._parse_json_response(full_response)
-            
-            if result:
-                raw_code = result.get('code', '')
-                clean_code = self._sanitize_code(raw_code)
-                return CodeGenerationResult(
-                    thinking=result.get('thinking', ''),
-                    code=clean_code,
-                    success=bool(clean_code.strip())
-                )
-            
-            # 最后尝试从部分 JSON 中提取
-            code_match = re.search(r'"code"\s*:\s*"(.*?)"\s*,?\s*\}?', full_response, re.DOTALL)
-            if code_match:
-                extracted = code_match.group(1)
-                extracted = extracted.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
-                clean_code = self._sanitize_code(extracted)
-                if clean_code.strip():
+                print(f"[CodeGenerator] 开始流式生成代码 (尝试 {retry + 1}/{self.max_retries})...")
+                
+                try:
+                    # 使用流式输出
+                    full_response = ""
+                    
+                    try:
+                        for chunk in self.llm.stream(structured_prompt):
+                            if chunk.content:
+                                content = chunk.content
+                                full_response += content
+                                print(content, end="", flush=True)
+                    except Exception as e:
+                        # 如果流式输出失败，回退到同步调用
+                        print(f"\n[CodeGenerator] 流式输出失败，回退到同步调用: {e}")
+                        try:
+                            response = self.llm.invoke(structured_prompt)
+                            full_response = response.content if hasattr(response, 'content') else str(response)
+                        except Exception as e2:
+                            last_error = str(e2)
+                            continue
+                    
+                    # 检查是否有响应
+                    if not full_response.strip():
+                        print("[CodeGenerator] 未收到响应")
+                        if retry < self.max_retries - 1:
+                            print(f"[CodeGenerator] 等待 {self.retry_delay} 秒后重试...")
+                            continue
+                        else:
+                            print("[CodeGenerator] 达到最大重试次数")
+                            return CodeGenerationResult(
+                                thinking='',
+                                code="",
+                                success=False,
+                                error="达到最大重试次数，请稍后重试"
+                            )
+                    
+                    print()  # 换行
+                    
+                    # 提取代码
+                    code = self._extract_code_fallback(full_response)
+                    
+                    if code.strip():
+                        return CodeGenerationResult(
+                            thinking='',
+                            code=code,
+                            success=True
+                        )
+                    
+                    # 如果 markdown 提取失败，尝试 JSON 解析
+                    result = self._parse_json_response(full_response)
+                    
+                    if result:
+                        raw_code = result.get('code', '')
+                        clean_code = self._sanitize_code(raw_code)
+                        return CodeGenerationResult(
+                            thinking=result.get('thinking', ''),
+                            code=clean_code,
+                            success=bool(clean_code.strip())
+                        )
+                    
+                    # 最后尝试从部分 JSON 中提取
+                    code_match = re.search(r'"code"\s*:\s*"(.*?)"\s*,?\s*\}?', full_response, re.DOTALL)
+                    if code_match:
+                        extracted = code_match.group(1)
+                        extracted = extracted.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+                        clean_code = self._sanitize_code(extracted)
+                        if clean_code.strip():
+                            return CodeGenerationResult(
+                                thinking='从部分 JSON 中提取代码',
+                                code=clean_code,
+                                success=True
+                            )
+                    
                     return CodeGenerationResult(
-                        thinking='从部分 JSON 中提取代码',
-                        code=clean_code,
-                        success=True
+                        thinking='无法提取有效代码',
+                        code='',
+                        success=False
                     )
-            
-            return CodeGenerationResult(
-                thinking='无法提取有效代码',
-                code='',
-                success=False
-            )
                 
         except Exception as e:
             return CodeGenerationResult(
