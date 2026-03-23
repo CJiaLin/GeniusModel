@@ -323,7 +323,17 @@ class CodeGenerator:
         # 尝试匹配 ```python ... (不完整的代码块，没有结束的 ```)
         code_match = re.search(r'```python\n(.*?)(?:\n```|$)', content, re.DOTALL)
         if code_match:
-            return code_match.group(1).strip()
+            extracted = code_match.group(1).strip()
+            # 如果提取的代码看起来不完整，尝试获取更多内容
+            if extracted and not self._is_code_complete(extracted):
+                # 尝试获取从 ```python 开始到文件结束的所有内容
+                python_start = content.find('```python')
+                if python_start >= 0:
+                    extracted = content[python_start + 10:].strip()
+                    # 移除可能的结束标记
+                    if extracted.endswith('```'):
+                        extracted = extracted[:-3].strip()
+            return extracted
         
         # 尝试匹配 ``` ... ```
         code_match = re.search(r'```\n(.*?)\n```', content, re.DOTALL)
@@ -345,9 +355,28 @@ class CodeGenerator:
         
         # 返回空字符串
         return ""
+    
+    def _is_code_complete(self, code: str) -> bool:
+        """检查代码是否完整（简单的括号匹配检查）"""
+        # 统计括号数量
+        open_parens = code.count('(') - code.count(')')
+        open_brackets = code.count('[') - code.count(']')
+        open_braces = code.count('{') - code.count('}')
         
-        # 如果无法提取代码，返回空字符串
-        return ""
+        # 如果有未闭合的括号，代码不完整
+        if open_parens > 0 or open_brackets > 0 or open_braces > 0:
+            return False
+        
+        # 检查是否有未闭合的字符串
+        # 简单检查：如果代码以奇数个引号结尾，可能不完整
+        lines = code.strip().split('\n')
+        if lines:
+            last_line = lines[-1]
+            # 检查是否以不完整的表达式结尾
+            if last_line.rstrip().endswith(('(', '[', '{', ',', '+', '-', '*', '/', '=', ':')):
+                return False
+        
+        return True
 
     def _sanitize_code(self, code: str) -> str:
         """
