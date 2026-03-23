@@ -503,8 +503,7 @@ class DataCleaningAgent(ReActAgent):
         result = codeact.generate_and_execute(
             task_prompt=task_prompt,
             context=context,
-            required_outputs=[],
-            required_filepath=self.cleaned_data_path
+            required_outputs=[]
         )
 
         if result.success:
