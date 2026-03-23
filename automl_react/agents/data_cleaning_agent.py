@@ -316,21 +316,21 @@ class DataCleaningAgent(ReActAgent):
         try:
             prompt_template = self.config_loader.get_prompt("data_cleaning", "plan_generation")
         except KeyError:
-            prompt_template = """你是一位数据清洗专家。以下是数据质量分析报告：
+            prompt_template = """你是一位数据清洗专家。以下是**实际数据**的质量分析报告：
 
 {task_context}{data_summary}
 
 {skill_content}
 
-**重要指示**：
-1. 你必须基于上述数据质量分析报告中识别的问题，制定针对性的清洗方案
-2. 不要重复分析数据质量问题，直接给出清洗策略
-3. 清洗方案必须与上述报告中的数据特征一致
-4. 清洗方案应服务于用户的建模目标
-5. **数据文件路径为: {data_path}**
-6. **如果需要加载数据验证，必须使用 load_data 工具，参数为 {{"file_path": "{data_path}"}}**
+**🔴 极其重要的指示**：
+1. **你必须基于上述数据质量分析报告中的实际数据生成清洗方案**
+2. **数据文件路径为: {data_path}**
+3. **上述报告中的数据形状是 {shape}，列名是实际数据的列名**
+4. **禁止使用任何示例数据或虚构数据**
+5. **清洗方案中的所有列名必须与上述报告中的列名一致**
+6. **如果上述报告显示数据形状是 (1460, 81)，你的方案必须针对 1460 行 81 列的数据**
 
-请生成 Markdown 格式的清洗方案，如果需要查看数据，请先使用 load_data 工具加载数据。
+请生成 Markdown 格式的清洗方案，方案必须基于上述实际数据的质量分析报告。
 """
 
         # 构建 skill 内容
@@ -356,7 +356,8 @@ class DataCleaningAgent(ReActAgent):
             data_path=path,
             data_summary=data_summary,
             skill_content=skill_content,
-            task_context=task_context
+            task_context=task_context,
+            shape=self.data_info['shape']
         )
 
         # 使用 ReAct 模式生成方案
