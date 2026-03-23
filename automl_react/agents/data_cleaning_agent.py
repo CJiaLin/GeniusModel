@@ -531,7 +531,7 @@ class DataCleaningAgent(ReActAgent):
 
     def execute_cleaning(self, code: str = None) -> Dict[str, Any]:
         """
-        执行清洗代码
+        执行清洗代码（使用 CodeActAgent）
 
         Args:
             code: 清洗代码，为 None 时使用已生成的代码
@@ -539,47 +539,46 @@ class DataCleaningAgent(ReActAgent):
         Returns:
             执行结果
         """
-        from ..utils.code_generator import CodeGenerator
-        import shutil
+        import os
+        import pandas as pd
 
         cleaning_code = code or self.cleaning_code
 
         if not cleaning_code:
             raise ValueError("请先生成清洗代码")
 
-        # 使用代码生成器执行代码
-        code_gen = CodeGenerator()
-
-
+        # 使用 CodeActAgent 执行代码
+        from ..utils.codeact_agent import CodeActAgent
+        
+        codeact = CodeActAgent(llm=self.llm, max_iterations=1, timeout=300)
+        
         context = {
             "data_path": self.data_path,
             "cleaned_data_path": self.cleaned_data_path
         }
 
-        exec_result = code_gen.execute_code(cleaning_code, context)
+        # 直接执行代码（不生成新代码）
+        exec_result = codeact._execute_code(cleaning_code, context)
 
         # 检查是否成功生成了清洗后的数据文件
-        import os
         file_exists = os.path.exists(self.cleaned_data_path)
-
-        # 将清洗后的数据复制到 session 目录
-        final_cleaned_path = None
+        
+        # 验证数据文件
         if file_exists:
-            session_cleaned_path = self.cleaned_data_path
-            session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(self.cleaned_data_path, session_cleaned_path)
-            final_cleaned_path = str(session_cleaned_path)
-            print(f"[Agent] 清洗后数据已复制到 session 目录: {final_cleaned_path}")
-            # 删除临时文件
-            os.remove(temp_cleaned_path)
+            try:
+                df = pd.read_csv(self.cleaned_data_path)
+                print(f"[Agent] 清洗后数据验证成功: {df.shape[0]} 行 × {df.shape[1]} 列")
+            except Exception as e:
+                print(f"[Agent] 清洗后数据验证失败: {e}")
+                file_exists = False
 
         # 构建结果
         result_info = {
-            "success": file_exists,  # 只要文件存在就认为成功
-            "cleaned_data_path": final_cleaned_path,
+            "success": file_exists,
+            "cleaned_data_path": self.cleaned_data_path if file_exists else None,
             "original_path": self.data_path,
-            "execution_output": exec_result.output,
-            "execution_error": exec_result.error if not file_exists else None,
+            "execution_output": exec_result.get("output", ""),
+            "execution_error": exec_result.get("error") if not file_exists else None,
             "timestamp": datetime.now().isoformat()
         }
 
