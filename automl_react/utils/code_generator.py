@@ -159,27 +159,14 @@ class CodeGenerator:
                         code='',
                         success=False
                     )
-                    
-                except Exception as e:
-                    return CodeGenerationResult(
-                        thinking='',
-                        code='',
-                        success=False,
-                        error=str(e)
-                    )
-            
-            except Exception as e:
-                last_error = str(e)
-                if retry < self.max_retries - 1:
-                    print(f"[CodeGenerator] 等待 {self.retry_delay} 秒后重试...")
-                    continue
-                else:
-                    return CodeGenerationResult(
-                        thinking='',
-                        code='',
-                        success=False,
-                        error=f"达到最大重试次数，最后错误: {last_error}"
-                    )
+                
+        except Exception as e:
+            return CodeGenerationResult(
+                thinking='',
+                code='',
+                success=False,
+                error=str(e)
+            )
     
     def generate_code_with_validation(
         self,

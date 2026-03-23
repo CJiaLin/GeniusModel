@@ -41,8 +41,7 @@ class CodeActAgent:
         self,
         task_prompt: str,
         context: Dict[str, Any] = None,
-        required_outputs: List[str] = None,
-        required_files: List[str] = None
+        required_outputs: List[str] = None
     ) -> CodeActResult:
         """
         生成并执行代码（CodeAct 模式）
@@ -51,7 +50,6 @@ class CodeActAgent:
             task_prompt: 任务提示词
             context: 执行上下文变量
             required_outputs: 需要验证的输出变量名
-            required_files: 需要验证的输出文件路径列表
             
         Returns:
             CodeActResult
@@ -81,12 +79,6 @@ class CodeActAgent:
             
             current_code = code_result["code"]
             
-            # 检查代码完整性
-            if not self._is_code_complete(current_code):
-                last_error = "代码不完整：代码被截断，缺少必要的结束部分。请生成完整的代码，确保包含所有必要的函数调用和数据保存逻辑。"
-                print(f"[CodeAct] 代码不完整，将重试...")
-                continue
-            
             # 执行代码
             print(f"[CodeAct] 执行代码...")
             exec_result = self._execute_code(current_code, context)
@@ -97,15 +89,6 @@ class CodeActAgent:
                     missing = [var for var in required_outputs if var not in exec_result.get("variables", {})]
                     if missing:
                         last_error = f"缺少必需的输出变量: {missing}"
-                        continue
-                
-                # 检查必需的输出文件
-                if required_files:
-                    import os
-                    missing_files = [f for f in required_files if not os.path.exists(f)]
-                    if missing_files:
-                        last_error = f"缺少必需的输出文件: {missing_files}。请确保代码中包含保存这些文件的逻辑。"
-                        print(f"[CodeAct] 缺少输出文件: {missing_files}")
                         continue
                 
                 # 成功
@@ -238,7 +221,7 @@ class CodeActAgent:
     
     def _extract_code(self, content: str) -> str:
         """从响应中提取代码"""
-        # 尝试匹配 ```python ... ```
+        # 尝试匹配 ```python\n(.*?)\n```
         code_match = re.search(r'```python\n(.*?)\n```', content, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
@@ -285,14 +268,28 @@ class CodeActAgent:
             if last_line.endswith(('(', '[', '{', ',', '+', '-', '*', '/', '=', ':', '\\')):
                 print(f"[CodeAct] 检测到不完整的表达式结尾: {last_line}")
                 return False
+            
+            # 检查是否以注释符号结尾（可能被截断）
+            if last_line.rstrip().endswith('#'):
+                print(f"[CodeAct] 检测到不完整的注释: {last_line}")
+                return False
         
-        # 检查是否有未闭合的字符串（简单检查）
-        # 统计单引号和双引号数量（排除转义的）
+        # 检查是否有未闭合的字符串
         single_quotes = len(re.findall(r"(?<!\\)'", code))
         double_quotes = len(re.findall(r'(?<!\\)"', code))
         
         if single_quotes % 2 != 0 or double_quotes % 2 != 0:
             print(f"[CodeAct] 检测到未闭合的字符串: 单引号={single_quotes}, 双引号={double_quotes}")
             return False
+        
+        # 检查是否包含必要的代码结构
+        if 'def ' in code:
+            # 检查是否有 if __name__ == '__main__' 或函数调用
+            if "if __name__" not in code and not re.search(r'\w+\s*\([^)]*\)\s*$', code):
+                func_names = re.findall(r'def\s+(\w+)\s*\(', code)
+                has_call = any(re.search(rf'\b{name}\s*\(', code.split(f'def {name}')[1] if f'def {name}' in code else '') for name in func_names)
+                if func_names and not has_call and "if __name__" not in code:
+                    print(f"[CodeAct] 检测到函数定义但缺少函数调用: {func_names}")
+                    return False
         
         return True
