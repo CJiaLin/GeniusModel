@@ -105,12 +105,49 @@ class CodeGenerator:
                     success=bool(clean_code.strip())
                 )
             else:
-                # 如果 JSON 解析失败，尝试提取代码
+                # 如果 JSON 解析失败，尝试多种方法提取代码
+                # 方法1: 尝试从部分 JSON 中提取 code 字段
+                import re
+                code_match = re.search(r'"code"\s*:\s*"(.*?)"\s*,?\s*\}?', full_response, re.DOTALL)
+                if code_match:
+                    extracted = code_match.group(1)
+                    # 处理转义字符
+                    extracted = extracted.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+                    clean_code = self._sanitize_code(extracted)
+                    if clean_code.strip():
+                        return CodeGenerationResult(
+                            thinking='从部分 JSON 中提取代码',
+                            code=clean_code,
+                            success=True
+                        )
+                
+                # 方法2: 尝试提取 markdown 代码块
                 code = self._sanitize_code(self._extract_code_fallback(full_response))
+                if code.strip():
+                    return CodeGenerationResult(
+                        thinking='JSON 解析失败，使用备用提取方法',
+                        code=code,
+                        success=True
+                    )
+                
+                # 方法3: 如果响应中包含 Python 代码特征，直接返回
+                if 'import pandas' in full_response or 'import numpy' in full_response:
+                    # 尝试提取从 import 开始到文件结束的内容
+                    import_start = full_response.find('import ')
+                    if import_start > 0:
+                        potential_code = full_response[import_start-7:]  # 包含 'import' 前面的 'from ' 或 'import '
+                        clean_code = self._sanitize_code(potential_code)
+                        if clean_code.strip():
+                            return CodeGenerationResult(
+                                thinking='直接提取代码内容',
+                                code=clean_code,
+                                success=True
+                            )
+                
                 return CodeGenerationResult(
-                    thinking='JSON 解析失败，使用备用提取方法',
-                    code=code,
-                    success=bool(code.strip())
+                    thinking='无法提取有效代码',
+                    code='',
+                    success=False
                 )
                 
         except Exception as e:
