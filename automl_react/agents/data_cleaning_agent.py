@@ -467,9 +467,12 @@ class DataCleaningAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
 
+        cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
+        
         task_prompt = f"""基于以下清洗方案，生成完整的 Python 代码：
 
 数据路径: {self.data_path}
+输出路径: {cleaned_data_path}
 {data_info_text}
 
 清洗方案:
@@ -477,22 +480,21 @@ class DataCleaningAgent(ReActAgent):
 
 {modifications_text}
 
-要求：
-1. 使用 pandas 进行数据处理
-2. 包含详细的注释
-3. 保存清洗后的数据到指定路径: {str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")}
-4. 返回清洗结果统计
-5. 代码必须完整可执行，包含所有必要的导入语句
+**关键要求：**
+1. 代码必须完整，包含所有必要的导入语句和主函数
+2. 最后必须使用 df.to_csv('{cleaned_data_path}', index=False) 保存清洗后的数据
+3. 必须创建输出目录（如果不存在）：os.makedirs(os.path.dirname('{cleaned_data_path}'), exist_ok=True)
+4. 代码执行后必须生成文件：{cleaned_data_path}
+5. 使用 pandas 进行数据处理，包含详细注释
 6. 必须使用上述实际数据的列名，不要使用示例数据
 
-请生成完整的、可执行的 Python 代码。
+请生成完整的、可执行的 Python 代码。代码末尾必须有保存数据的语句。
 """
 
         # 使用 CodeActAgent 生成并执行代码
         codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300)
 
         # 准备执行上下文
-        cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
         context = {
             "data_path": self.data_path,
             "cleaned_data_path": cleaned_data_path
