@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-测试新的工作流程：数据清洗（含质量分析）→ 数据探索性分析 → 特征工程
+测试新的工作流程：数据清洗（含质量分析）→ 数据探索性分析 → 特征工程（方案+代码+执行）
 """
 
 import requests
@@ -24,7 +24,7 @@ TASK_DESCRIPTION = """
 def test_new_workflow():
     """测试新的工作流程"""
     print("=" * 80)
-    print("测试新工作流程：数据清洗（含质量分析）→ 数据探索性分析 → 特征工程")
+    print("测试新工作流程：数据清洗（含质量分析）→ 数据探索性分析 → 特征工程（方案+代码+执行）")
     print("=" * 80)
     
     # 1. 启动工作流
@@ -118,10 +118,35 @@ def test_new_workflow():
     result = response.json()
     feature_confirmation_id = result.get("confirmation_id")
     print(f"✅ 特征工程方案生成完成，方案长度: {len(result.get('proposal', ''))} 字符")
+    print(f"   确认 ID: {feature_confirmation_id}")
     
-    # 6. 检查资产文件
+    # 6. 特征工程阶段 - 提交确认并执行
     print("\n" + "=" * 80)
-    print("6. 检查资产文件")
+    print("6. 特征工程阶段 - 提交确认并执行")
+    print("=" * 80)
+    url = f"{BASE_URL}/confirmation/submit"
+    data_submit = {
+        "session_id": session_id,
+        "confirmation_id": feature_confirmation_id,
+        "status": "confirmed",
+        "modifications": None
+    }
+    response = requests.post(url, json=data_submit, timeout=300)
+    
+    if response.status_code != 200:
+        print(f"❌ 特征工程执行失败: {response.status_code} - {response.text}")
+        return
+    
+    result = response.json()
+    execution = result.get("execution", {})
+    features_data_path = execution.get("features_data_path")
+    print(f"✅ 特征工程执行完成")
+    print(f"   - success: {execution.get('success')}")
+    print(f"   - features_data_path: {features_data_path}")
+    
+    # 7. 检查资产文件
+    print("\n" + "=" * 80)
+    print("7. 检查资产文件")
     print("=" * 80)
     
     url = f"{BASE_URL}/assets/{session_id}/list"
@@ -137,17 +162,18 @@ def test_new_workflow():
     else:
         print(f"❌ 获取资产列表失败: {response.text}")
     
-    # 7. 总结
+    # 8. 总结
     print("\n" + "=" * 80)
     print("测试总结")
     print("=" * 80)
     print("✅ 数据清洗阶段完成（包含数据质量分析 + 执行）")
     print("✅ 数据探索性分析阶段完成（基于清洗后数据）")
-    print("✅ 特征工程阶段完成（方案生成）")
+    print("✅ 特征工程阶段完成（方案生成 + 代码生成 + 执行）")
     print(f"\n数据流:")
     print(f"  原始数据 → 清洗后数据 → 探索性分析 → 特征工程")
     print(f"  {TRAIN_DATA_PATH}")
     print(f"  → {cleaned_data_path}")
+    print(f"  → {features_data_path}")
     print(f"\n会话 ID: {session_id}")
     print(f"资产目录: assets/{session_id}/")
     print("\n新工作流程测试通过！")
