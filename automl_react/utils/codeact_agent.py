@@ -6,6 +6,7 @@ CodeAct 模式：LLM 生成代码 → 执行代码 → 观察执行结果 → �
 """
 
 import json
+import os
 import re
 import time
 import traceback
@@ -42,7 +43,8 @@ class CodeActAgent:
         self,
         task_prompt: str,
         context: Dict[str, Any] = None,
-        required_outputs: List[str] = None
+        required_outputs: List[str] = None,
+        required_filepath: str = None
     ) -> CodeActResult:
         """
         生成并执行代码（CodeAct 模式）
@@ -91,8 +93,14 @@ class CodeActAgent:
                     if missing:
                         last_error = f"缺少必需的输出变量: {missing}"
                         continue
-                
-                # 成功
+                if required_filepath:
+                    if os.path.isfile(required_filepath):
+                        df = pd.read_csv(required_filepath)
+                        print('生成数据成功，数据大小：', df.shape)
+                    else:
+                        last_error = f"没有生成文件: {required_filepath}，检查生成的代码是否完整"
+                        continue
+                # 成功 
                 execution_time = time.time() - start_time
                 return CodeActResult(
                     success=True,

@@ -467,27 +467,27 @@ class DataCleaningAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
 
-        cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
+        cleaned_data_path = str(self.asset_manager.session_dir / "data" / self.data_path.replace('.csv', '_cleaned.csv'))
         
         task_prompt = f"""基于以下清洗方案，生成简洁的 Python 代码：
 
 数据路径: {self.data_path}
+{data_info_text}
 
-**输出路径（必须使用此路径）: {cleaned_data_path}**
+清洗方案:
+{self.cleaning_plan}
 
-清洗方案摘要:
-1. 删除高缺失率列: PoolQC, MiscFeature, Alley, Fence, MasVnrType
-2. 填充缺失值:
-   - 分类变量填充 'None'
-   - 数值变量填充 0 或中位数
+{modifications_text}
 
-**关键要求：**
-1. 必须在代码开头创建输出目录：os.makedirs(os.path.dirname('{cleaned_data_path}'), exist_ok=True)
-2. 必须在代码末尾保存数据：df.to_csv('{cleaned_data_path}', index=False)
-3. 输出路径必须是: {cleaned_data_path}
-4. 代码必须简洁，不要超过100行
+要求：
+1. 使用 pandas 进行数据处理
+2. 保存清洗后的数据到指定路径: {cleaned_data_path}
+3. 只做数据清洗，不生成其他特征
+4. 返回清洗结果统计
+5. 代码必须完整可执行，包含所有必要的导入语句
+6. 必须使用上述实际数据的列名，不要使用示例数据
 
-请生成简洁的、可执行的 Python 代码。
+请生成完整的、可执行的 Python 代码。
 """
 
         # 使用 CodeActAgent 生成并执行代码
@@ -503,7 +503,8 @@ class DataCleaningAgent(ReActAgent):
         result = codeact.generate_and_execute(
             task_prompt=task_prompt,
             context=context,
-            required_outputs=[]
+            required_outputs=[],
+            required_filepath=cleaned_data_path
         )
 
         if result.success:
@@ -523,23 +524,7 @@ class DataCleaningAgent(ReActAgent):
                         "timestamp": datetime.now().isoformat()
                     }
                 )
-            
-            # 检查清洗后的数据文件是否存在于资产目录
-            import os
-            import pandas as pd
-            
-            if os.path.exists(cleaned_data_path):
-                # 验证数据格式和形状
-                try:
-                    df = pd.read_csv(cleaned_data_path)
-                    print(f"[CodeAct] 清洗后数据验证成功: {df.shape[0]} 行 × {df.shape[1]} 列")
-                    return self.cleaning_code
-                except Exception as e:
-                    print(f"[CodeAct] 清洗后数据验证失败: {e}")
-                    raise ValueError(f"清洗后数据验证失败: {e}")
-            else:
-                print(f"[CodeAct] 清洗后数据文件不存在: {cleaned_data_path}")
-                raise ValueError(f"清洗后数据文件不存在: {cleaned_data_path}")
+            return self.cleaning_code
         else:
             print(f"\n[CodeAct] 代码生成失败: {result.error}")
             raise ValueError(f"代码生成失败: {result.error}")
