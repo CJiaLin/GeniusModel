@@ -341,7 +341,7 @@ class FeatureEngineeringAgent(ReActAgent):
 
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
-        features_data_path = str(self.asset_manager.session_dir / "data" / self.data_path.replace('.csv', '_features.csv'))
+        features_data_path = str(self.asset_manager.session_dir / "data" / "features_data.csv")
 
         task_prompt = f"""基于以下特征工程方案，生成完整的 Python 代码：
 

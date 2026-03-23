@@ -13,6 +13,8 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
+import pandas as pd
+
 
 @dataclass
 class CodeActResult:
@@ -70,6 +72,7 @@ class CodeActAgent:
             if iteration == 0:
                 prompt = self._build_initial_prompt(task_prompt)
             else:
+                print(last_error)
                 prompt = self._build_retry_prompt(task_prompt, current_code, last_error)
             
             # 生成代码
@@ -93,6 +96,7 @@ class CodeActAgent:
                     if missing:
                         last_error = f"缺少必需的输出变量: {missing}"
                         continue
+            
                 if required_filepath:
                     if os.path.isfile(required_filepath):
                         df = pd.read_csv(required_filepath)

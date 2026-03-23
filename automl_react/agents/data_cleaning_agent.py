@@ -467,7 +467,7 @@ class DataCleaningAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
 
-        cleaned_data_path = str(self.asset_manager.session_dir / "data" / self.data_path.replace('.csv', '_cleaned.csv'))
+        cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
         
         task_prompt = f"""基于以下清洗方案，生成简洁的 Python 代码：
 
