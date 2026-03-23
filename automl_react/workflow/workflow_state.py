@@ -19,8 +19,8 @@ class WorkflowStage(Enum):
     Represents the different stages of the AutoML workflow pipeline.
     """
     DATA_UPLOAD = "data_upload"
-    DATA_ANALYSIS = "data_analysis"
-    DATA_CLEANING = "data_cleaning"
+    DATA_CLEANING = "data_cleaning"  # 包含数据质量分析
+    DATA_EXPLORATION = "data_exploration"  # 探索性数据分析（基于清洗后数据）
     FEATURE_ENGINEERING = "feature_engineering"
     MODEL_TRAINING = "model_training"
     MODEL_EVALUATION = "model_evaluation"
@@ -34,17 +34,16 @@ class WorkflowStage(Enum):
 # Define valid stage transitions
 VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
     WorkflowStage.DATA_UPLOAD: [
-        WorkflowStage.DATA_ANALYSIS,
-        WorkflowStage.ERROR,
-    ],
-    WorkflowStage.DATA_ANALYSIS: [
         WorkflowStage.DATA_CLEANING,
-        WorkflowStage.FEATURE_ENGINEERING,
         WorkflowStage.ERROR,
     ],
     WorkflowStage.DATA_CLEANING: [
+        WorkflowStage.DATA_EXPLORATION,
         WorkflowStage.FEATURE_ENGINEERING,
-        WorkflowStage.MODEL_TRAINING,
+        WorkflowStage.ERROR,
+    ],
+    WorkflowStage.DATA_EXPLORATION: [
+        WorkflowStage.FEATURE_ENGINEERING,
         WorkflowStage.ERROR,
     ],
     WorkflowStage.FEATURE_ENGINEERING: [
@@ -62,8 +61,8 @@ VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
     WorkflowStage.COMPLETED: [],
     WorkflowStage.ERROR: [
         WorkflowStage.DATA_UPLOAD,
-        WorkflowStage.DATA_ANALYSIS,
         WorkflowStage.DATA_CLEANING,
+        WorkflowStage.DATA_EXPLORATION,
         WorkflowStage.FEATURE_ENGINEERING,
         WorkflowStage.MODEL_TRAINING,
     ],

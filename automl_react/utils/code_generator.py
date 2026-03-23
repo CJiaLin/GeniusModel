@@ -106,7 +106,7 @@ class CodeGenerator:
                 )
             else:
                 # 如果 JSON 解析失败，尝试提取代码
-                code = self._sanitize_code(self._extract_code_fallback(content))
+                code = self._sanitize_code(self._extract_code_fallback(full_response))
                 return CodeGenerationResult(
                     thinking='JSON 解析失败，使用备用提取方法',
                     code=code,
@@ -304,8 +304,8 @@ class CodeGenerator:
         if code_match:
             return code_match.group(1).strip()
         
-        # 返回原始内容
-        return content.strip()
+        # 如果无法提取代码，返回空字符串
+        return ""
 
     def _sanitize_code(self, code: str) -> str:
         """
@@ -323,11 +323,17 @@ class CodeGenerator:
                 if isinstance(parsed, dict) and 'code' in parsed:
                     extracted_code = parsed['code']
                     if isinstance(extracted_code, str):
-                        # JSON 解析后，\n 已经是实际换行符，直接返回
                         return extracted_code
                     return str(extracted_code)
             except json.JSONDecodeError:
-                pass
+                # JSON 解析失败，尝试使用正则表达式提取 code 字段
+                import re
+                code_match = re.search(r'"code"\s*:\s*"(.*?)"\s*,?\s*\}', cleaned, re.DOTALL)
+                if code_match:
+                    extracted = code_match.group(1)
+                    # 处理转义字符
+                    extracted = extracted.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+                    return extracted
 
         # 移除常见的 Markdown 代码块围栏行
         lines = []

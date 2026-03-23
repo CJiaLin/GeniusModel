@@ -59,6 +59,12 @@ class DataCleaningAgent(ReActAgent):
 3. 编写清洗代码
 4. 执行清洗并验证结果
 
+**重要原则**：
+- 必须使用用户上传的实际数据文件进行分析和清洗
+- 禁止使用示例数据或虚构数据
+- 所有分析结果必须基于实际数据的统计信息
+- 清洗代码必须针对实际数据的列名和特征
+
 请基于数据分析和最佳实践，生成详细的清洗方案。"""
 
     def analyze_data(self, data_path: str) -> Dict[str, Any]:
@@ -89,13 +95,191 @@ class DataCleaningAgent(ReActAgent):
 
         return result
 
-    def generate_cleaning_plan(self, data_path: str = None, analysis_result: str = None, task_description: str = "") -> str:
+    def analyze_data_quality(self, data_path: str, task_description: str = "") -> Dict[str, Any]:
         """
-        生成数据清洗思路
+        分析数据质量，识别数据质量问题
 
         Args:
             data_path: 数据文件路径
-            analysis_result: 数据分析报告（可选，如果提供则直接使用）
+            task_description: 用户的建模背景和要求
+
+        Returns:
+            数据质量分析结果
+        """
+        import pandas as pd
+        import numpy as np
+
+        self.data_path = data_path
+
+        try:
+            df = pd.read_csv(data_path)
+
+            # 1. 数据完整性分析（缺失值）
+            missing_analysis = {}
+            for col in df.columns:
+                missing_count = df[col].isnull().sum()
+                missing_ratio = missing_count / len(df) * 100
+                if missing_count > 0:
+                    missing_analysis[col] = {
+                        "missing_count": int(missing_count),
+                        "missing_ratio": round(missing_ratio, 2),
+                        "dtype": str(df[col].dtype)
+                    }
+
+            # 2. 数据一致性分析（异常值检测）
+            outlier_analysis = {}
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                Q1 = df[col].quantile(0.25)
+                Q3 = df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - 1.5 * IQR
+                upper_bound = Q3 + 1.5 * IQR
+                outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)][col]
+                if len(outliers) > 0:
+                    outlier_analysis[col] = {
+                        "outlier_count": len(outliers),
+                        "outlier_ratio": round(len(outliers) / len(df) * 100, 2),
+                        "lower_bound": round(lower_bound, 2),
+                        "upper_bound": round(upper_bound, 2)
+                    }
+
+            # 3. 数据唯一性分析（重复值）
+            duplicate_rows = df.duplicated().sum()
+            duplicate_analysis = {
+                "duplicate_rows": int(duplicate_rows),
+                "duplicate_ratio": round(duplicate_rows / len(df) * 100, 2)
+            }
+
+            # 4. 数据类型分析
+            dtype_analysis = {}
+            for col in df.columns:
+                dtype_analysis[col] = {
+                    "dtype": str(df[col].dtype),
+                    "unique_count": int(df[col].nunique()),
+                    "sample_values": df[col].dropna().head(3).tolist()
+                }
+
+            # 保存数据信息
+            self.data_info = {
+                "shape": df.shape,
+                "columns": list(df.columns),
+                "missing_analysis": missing_analysis,
+                "outlier_analysis": outlier_analysis,
+                "duplicate_analysis": duplicate_analysis,
+                "dtype_analysis": dtype_analysis,
+                "numeric_columns": list(numeric_cols),
+                "categorical_columns": list(df.select_dtypes(include=['object']).columns)
+            }
+
+            # 生成数据质量报告
+            quality_report = self._generate_quality_report(task_description)
+
+            return {
+                "success": True,
+                "data_info": self.data_info,
+                "quality_report": quality_report
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def _generate_quality_report(self, task_description: str = "") -> str:
+        """
+        生成数据质量报告
+
+        Args:
+            task_description: 用户的建模背景和要求
+
+        Returns:
+            数据质量报告（Markdown 格式）
+        """
+        if not self.data_info:
+            return "未进行数据质量分析"
+
+        report_lines = ["# 数据质量分析报告\n"]
+
+        # 添加用户建模背景
+        if task_description:
+            report_lines.append("## 用户建模背景和要求\n")
+            report_lines.append(f"{task_description}\n\n")
+
+        # 数据基本信息
+        report_lines.append("## 数据基本信息\n")
+        report_lines.append(f"- 数据形状: {self.data_info['shape'][0]} 行 × {self.data_info['shape'][1]} 列\n")
+        report_lines.append(f"- 数值列数量: {len(self.data_info['numeric_columns'])}\n")
+        report_lines.append(f"- 分类列数量: {len(self.data_info['categorical_columns'])}\n\n")
+
+        # 缺失值分析
+        report_lines.append("## 数据完整性分析（缺失值）\n")
+        if self.data_info['missing_analysis']:
+            report_lines.append("| 列名 | 缺失数量 | 缺失比例 | 数据类型 | 建议处理方式 |\n")
+            report_lines.append("|------|----------|----------|----------|--------------|\n")
+            for col, info in sorted(self.data_info['missing_analysis'].items(), 
+                                   key=lambda x: x[1]['missing_ratio'], reverse=True):
+                suggestion = "删除列" if info['missing_ratio'] > 50 else "填充/插值" if info['missing_ratio'] > 5 else "简单填充"
+                report_lines.append(f"| {col} | {info['missing_count']} | {info['missing_ratio']}% | {info['dtype']} | {suggestion} |\n")
+        else:
+            report_lines.append("无缺失值\n")
+        report_lines.append("\n")
+
+        # 异常值分析
+        report_lines.append("## 数据一致性分析（异常值）\n")
+        if self.data_info['outlier_analysis']:
+            report_lines.append("| 列名 | 异常值数量 | 异常值比例 | 正常范围 | 建议处理方式 |\n")
+            report_lines.append("|------|------------|------------|----------|--------------|\n")
+            for col, info in self.data_info['outlier_analysis'].items():
+                suggestion = "删除" if info['outlier_ratio'] > 10 else "Winsorize" if info['outlier_ratio'] > 1 else "保留"
+                report_lines.append(f"| {col} | {info['outlier_count']} | {info['outlier_ratio']}% | [{info['lower_bound']}, {info['upper_bound']}] | {suggestion} |\n")
+        else:
+            report_lines.append("未检测到明显异常值\n")
+        report_lines.append("\n")
+
+        # 重复值分析
+        report_lines.append("## 数据唯一性分析（重复值）\n")
+        dup_info = self.data_info['duplicate_analysis']
+        report_lines.append(f"- 重复行数: {dup_info['duplicate_rows']}\n")
+        report_lines.append(f"- 重复比例: {dup_info['duplicate_ratio']}%\n")
+        if dup_info['duplicate_rows'] > 0:
+            report_lines.append("- 建议处理方式: 删除重复行\n")
+        report_lines.append("\n")
+
+        # 数据类型分析
+        report_lines.append("## 数据类型分析\n")
+        dtype_issues = []
+        for col, info in self.data_info['dtype_analysis'].items():
+            if info['dtype'] == 'object' and info['unique_count'] < 10:
+                dtype_issues.append(f"- {col}: 可能是分类变量，建议转换为 category 类型")
+            elif info['dtype'] == 'object' and info['unique_count'] > 100:
+                dtype_issues.append(f"- {col}: 高基数文本列，可能需要文本处理或删除")
+
+        if dtype_issues:
+            report_lines.append("### 潜在数据类型问题\n")
+            report_lines.extend([issue + "\n" for issue in dtype_issues])
+        else:
+            report_lines.append("数据类型无明显问题\n")
+        report_lines.append("\n")
+
+        # 总结和建议
+        report_lines.append("## 数据质量总结和建议\n")
+        total_issues = (len(self.data_info['missing_analysis']) + 
+                       len(self.data_info['outlier_analysis']) + 
+                       (1 if self.data_info['duplicate_analysis']['duplicate_rows'] > 0 else 0))
+        report_lines.append(f"- 共发现 {total_issues} 类数据质量问题\n")
+        report_lines.append("- 建议优先处理高缺失率列和重复行\n")
+        report_lines.append("- 异常值处理需结合业务理解\n")
+
+        return "".join(report_lines)
+
+    def generate_cleaning_plan(self, data_path: str = None, task_description: str = "") -> str:
+        """
+        生成数据清洗方案（包含数据质量分析）
+
+        Args:
+            data_path: 数据文件路径
             task_description: 用户的建模背景和要求
 
         Returns:
@@ -107,133 +291,46 @@ class DataCleaningAgent(ReActAgent):
 
         self.data_path = path
 
-        # 如果有分析报告，直接使用，不重复分析
-        if analysis_result:
-            data_summary = f"""
-## 数据分析报告（来自上一阶段）
+        # 首先进行数据质量分析
+        if not self.data_info:
+            print(f"[DataCleaningAgent] 开始数据质量分析...")
+            quality_result = self.analyze_data_quality(path, task_description)
+            if not quality_result.get("success"):
+                raise ValueError(f"数据质量分析失败: {quality_result.get('error')}")
+            print(f"[DataCleaningAgent] 数据质量分析完成")
 
-{analysis_result}
+        # 使用数据质量报告作为数据摘要
+        data_summary = self._generate_quality_report(task_description)
+        
+        # 打印数据质量报告摘要
+        print(f"[DataCleaningAgent] 数据质量报告生成完成，长度: {len(data_summary)} 字符")
+        print(f"[DataCleaningAgent] 数据形状: {self.data_info['shape']}")
+        print(f"[DataCleaningAgent] 缺失值列数: {len(self.data_info['missing_analysis'])}")
+        print(f"[DataCleaningAgent] 数据质量报告预览:\n{data_summary[:500]}...")
 
----
-**请基于以上分析报告，直接生成数据清洗方案，不要重复分析数据质量问题。**
-
-方案应包括：
-1. 针对分析报告中识别的问题，制定具体的清洗策略
-2. 每个清洗步骤的具体操作方法
-3. 预期效果
-"""
-        else:
-            # 没有分析报告，自行分析数据
-            import pandas as pd
-            import os
-
-            try:
-                df = pd.read_csv(path)
-
-                # 收集数据基本信息
-                data_info = {
-                    "shape": df.shape,
-                    "columns": list(df.columns),
-                    "dtypes": df.dtypes.astype(str).to_dict(),
-                    "missing_values": df.isnull().sum().to_dict(),
-                    "missing_ratio": (df.isnull().sum() / len(df) * 100).to_dict(),
-                    "numeric_columns": list(df.select_dtypes(include=['int64', 'float64']).columns),
-                    "categorical_columns": list(df.select_dtypes(include=['object']).columns),
-                    "duplicate_rows": df.duplicated().sum(),
-                    "sample_data": df.head(3).to_dict()
-                }
-
-                # 找出缺失值最多的列
-                missing_sorted = sorted(
-                    [(k, v) for k, v in data_info["missing_values"].items() if v > 0],
-                    key=lambda x: x[1],
-                    reverse=True
-                )[:10]
-
-                # 找出数值列的统计信息
-                numeric_stats = df.describe().to_dict() if data_info["numeric_columns"] else {}
-
-                # 构建数据摘要
-                data_summary = f"""
-## 数据基本信息
-
-- **文件路径**: {path}
-- **数据形状**: {data_info['shape'][0]} 行 × {data_info['shape'][1]} 列
-- **重复行数**: {data_info['duplicate_rows']}
-- **数值列数量**: {len(data_info['numeric_columns'])}
-- **分类列数量**: {len(data_info['categorical_columns'])}
-
-## 缺失值情况 (Top 10)
-
-"""
-                for col, missing in missing_sorted:
-                    ratio = data_info["missing_ratio"][col]
-                    data_summary += f"- **{col}**: {missing} 个缺失 ({ratio:.1f}%)\n"
-
-                if not missing_sorted:
-                    data_summary += "- 无缺失值\n"
-
-                data_summary += f"""
-## 数值列统计
-
-主要数值列: {', '.join(data_info['numeric_columns'][:10])}
-
-## 分类列
-
-主要分类列: {', '.join(data_info['categorical_columns'][:10])}
-
-## 前3行数据预览
-
-列名: {', '.join(data_info['columns'][:10])}...
-"""
-
-                self.data_info = data_info
-
-            except Exception as e:
-                data_summary = f"无法加载数据文件: {path}\n错误: {str(e)}"
-
-        # 加载 data-analysis skill
-        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
-        pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
+        # 加载 data-cleaning skill
+        techniques = self.skill_loader.get_skill_reference("data-cleaning-1.0.0", "techniques.md")
+        pitfalls = self.skill_loader.get_skill_reference("data-cleaning-1.0.0", "pitfalls.md")
 
         # 从配置加载 Prompt
         try:
             prompt_template = self.config_loader.get_prompt("data_cleaning", "plan_generation")
         except KeyError:
-            if analysis_result:
-                # 有分析报告时，直接基于报告生成清洗方案
-                prompt_template = """你是一位数据清洗专家。以下是数据分析阶段生成的详细报告：
+            prompt_template = """你是一位数据清洗专家。以下是数据质量分析报告：
 
 {task_context}{data_summary}
 
 {skill_content}
 
 **重要指示**：
-1. 你必须基于上述分析报告中识别的数据质量问题，制定针对性的清洗方案
+1. 你必须基于上述数据质量分析报告中识别的问题，制定针对性的清洗方案
 2. 不要重复分析数据质量问题，直接给出清洗策略
-3. 清洗方案必须与上述报告中的数据特征一致（样本数、列名、缺失值情况等）
-4. 如果报告显示有 PoolQC、MiscFeature 等高缺失率列，方案中必须处理这些列
-5. 清洗方案应服务于用户的建模目标
+3. 清洗方案必须与上述报告中的数据特征一致
+4. 清洗方案应服务于用户的建模目标
+5. **数据文件路径为: {data_path}**
+6. **如果需要加载数据验证，必须使用 load_data 工具，参数为 {{"file_path": "{data_path}"}}**
 
-请生成 Markdown 格式的清洗方案，包括：
-1. 针对分析报告中识别的问题，制定具体的清洗策略
-2. 每个清洗步骤的具体操作方法
-3. 预期效果
-"""
-            else:
-                # 没有分析报告时，需要先分析数据
-                prompt_template = """请为以下数据生成详细的清洗方案：
-
-{task_context}{data_summary}
-
-{skill_content}
-
-请生成 Markdown 格式的清洗方案，包括：
-1. 数据质量问题分析
-2. 针对性的清洗步骤（基于实际数据）
-3. 预期效果
-
-重要：方案必须基于上述实际数据分析结果，不要使用示例数据。
+请生成 Markdown 格式的清洗方案，如果需要查看数据，请先使用 load_data 工具加载数据。
 """
 
         # 构建 skill 内容
@@ -262,7 +359,8 @@ class DataCleaningAgent(ReActAgent):
             task_context=task_context
         )
 
-        # 调用 LLM 生成方案
+        # 使用 ReAct 模式生成方案
+        # LLM 可以调用 load_data 工具加载用户上传的数据（路径: {path}）
         result = self.run(user_input, stage="data_cleaning_plan")
 
         self.cleaning_plan = result.get("answer", "")
@@ -341,13 +439,16 @@ class DataCleaningAgent(ReActAgent):
         # 构建数据信息摘要
         data_info_text = ""
         if self.data_info:
+            # 获取缺失值列
+            missing_cols = list(self.data_info.get('missing_analysis', {}).keys())[:10]
+            
             data_info_text = f"""
 ## 数据信息
 
 - 数据形状: {self.data_info['shape'][0]} 行 × {self.data_info['shape'][1]} 列
 - 数值列: {', '.join(self.data_info['numeric_columns'][:15])}
 - 分类列: {', '.join(self.data_info['categorical_columns'][:15])}
-- 缺失值列: {', '.join([k for k, v in self.data_info['missing_values'].items() if v > 0][:10])}
+- 缺失值列: {', '.join(missing_cols)}
 
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """

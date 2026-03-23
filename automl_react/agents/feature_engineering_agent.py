@@ -65,6 +65,12 @@ class FeatureEngineeringAgent(ReActAgent):
 3. 编写特征工程代码
 4. 执行特征工程并验证结果
 
+**重要原则**：
+- 必须使用用户上传的实际数据文件进行特征工程
+- 禁止使用示例数据或虚构数据
+- 所有特征工程方案必须基于实际数据的列名和特征
+- 特征工程代码必须针对实际数据的列名和特征
+
 请基于数据特征和最佳实践，生成详细的特征工程方案。"""
 
     def analyze_features(self, data_path: str, target_column: str) -> Dict[str, Any]:

@@ -234,7 +234,8 @@ async def start_workflow(request: StartWorkflowRequest):
         )
     
     # 创建 Agents
-    session["agents"]["analysis"] = DataAnalysisAgent(
+    from automl_react.agents import DataExplorationAgent
+    session["agents"]["exploration"] = DataExplorationAgent(
         llm=llm,
         session_id=request.session_id
     )
@@ -309,50 +310,73 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
         raise HTTPException(status_code=500, detail="确认管理器未初始化")
     
     # 根据阶段执行相应操作
-    if stage == "data_analysis":
-        agent = session["agents"].get("analysis")
+    if stage == "data_exploration":
+        agent = session["agents"].get("exploration")
         if not agent:
-            return {"success": False, "error": "DataAnalysis Agent 未初始化"}
+            return {"success": False, "error": "DataExploration Agent 未初始化"}
         
         try:
             # 获取用户的建模背景和要求
             task_description = workflow_state.get_context("task_description", "")
             
-            print(f"[API] ========== 数据分析阶段开始 ==========")
-            print(f"[API] 调用 agent.analyze({data_path})")
-            if task_description:
-                print(f"[API] 用户建模背景: {task_description[:100]}...")
+            print(f"[API] ========== 数据探索性分析阶段开始 ==========")
             
-            result = agent.analyze(data_path, task_description=task_description)
-            print(f"[API] analyze 返回结果: success={result.get('success')}, answer长度={len(result.get('answer', ''))}")
-            print(f"[API] answer 内容预览: {result.get('answer', '')[:200]}...")
-            
-            # 保存分析结果到资产
+            # 读取清洗后的数据路径
             asset_manager = get_asset_manager(session_id=session_id)
+            import json
+            cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
+            cleaned_data_path = None
+            if cleaning_result_json:
+                try:
+                    cleaning_data = json.loads(cleaning_result_json)
+                    cleaned_data_path = cleaning_data.get("cleaned_data_path")
+                except:
+                    pass
+            
+            # 如果没有清洗后的数据，使用原始数据
+            if not cleaned_data_path:
+                cleaned_data_path = data_path
+                print(f"[API] 使用原始数据: {cleaned_data_path}")
+            else:
+                print(f"[API] 使用清洗后的数据: {cleaned_data_path}")
+            
+            # 读取清洗报告
+            cleaning_report = asset_manager.read_asset("cleaning", "cleaning_plan.md")
+            
+            result = agent.explore(
+                cleaned_data_path,
+                target_column=target_column,
+                task_type=task_type,
+                task_description=task_description,
+                cleaning_report=cleaning_report
+            )
+            print(f"[API] explore 返回结果: success={result.get('success')}, answer长度={len(result.get('answer', ''))}")
+            
+            # 保存探索性分析结果到资产
             asset_manager.save_data(
                 data=str(result.get("answer", "")),
-                filename="data_analysis_result.md",
-                asset_type="analysis",
+                filename="data_exploration_result.md",
+                asset_type="exploration",
                 metadata={
-                    "stage": "data_analysis",
-                    "data_path": data_path,
+                    "stage": "data_exploration",
+                    "data_path": cleaned_data_path,
                     "task_description": task_description,
                     "timestamp": datetime.now().isoformat()
                 }
             )
-            print(f"[API] 分析结果已保存到: analysis/data_analysis_result.md")
-            print(f"[API] ========== 数据分析阶段完成 ==========")
+            print(f"[API] 探索性分析结果已保存到: exploration/data_exploration_result.md")
+            print(f"[API] ========== 数据探索性分析阶段完成 ==========")
             
             return {
                 "success": True,
                 "stage": stage,
-                "analysis": result.get("answer", ""),
+                "exploration": result.get("answer", ""),
                 "requires_confirmation": False
             }
         except Exception as e:
             import traceback
             error_detail = f"{str(e)}\n{traceback.format_exc()}"
-            print(f"[API] 数据分析错误: {error_detail}")
+            print(f"[API] 数据探索性分析错误: {error_detail}")
             return {"success": False, "error": error_detail}
     
     elif stage == "data_cleaning":
@@ -366,24 +390,16 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 if task_description:
                     print(f"[API] 用户建模背景: {task_description[:100]}...")
                 
-                # 读取数据分析报告
-                asset_manager = get_asset_manager(session_id=session_id)
-                analysis_result = asset_manager.read_asset("analysis", "data_analysis_result.md")
-                
-                if analysis_result:
-                    print(f"[API] 成功读取数据分析报告，长度: {len(analysis_result)} 字符")
-                    print(f"[API] 分析报告预览: {analysis_result[:200]}...")
-                else:
-                    print(f"[API] 警告: 未找到数据分析报告，将自行分析数据")
-                
+                # 数据清洗阶段自己进行数据质量分析
+                # 生成清洗方案（包含数据质量分析）
                 result = agent.generate_cleaning_plan(
                     data_path, 
-                    analysis_result=analysis_result,
                     task_description=task_description
                 )
                 print(f"[API] 清洗方案生成完成，长度: {len(result)} 字符")
                 
                 # 保存清洗方案到 session 目录
+                asset_manager = get_asset_manager(session_id=session_id)
                 asset_manager.save_data(
                     data=result,
                     filename="cleaning_plan.md",
@@ -391,7 +407,6 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     metadata={
                         "stage": "data_cleaning",
                         "data_path": data_path,
-                        "has_analysis_input": analysis_result is not None,
                         "timestamp": datetime.now().isoformat()
                     }
                 )
@@ -427,7 +442,8 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 
                 # 读取前一阶段的结果
                 asset_manager = get_asset_manager(session_id=session_id)
-                analysis_result = asset_manager.read_asset("analysis", "data_analysis_result.md")
+                # 读取探索性分析报告（新流程：exploration 目录）
+                exploration_result = asset_manager.read_asset("exploration", "data_exploration_result.md")
                 cleaning_result = asset_manager.read_asset("cleaning", "cleaning_plan.md")
                 
                 # 读取清洗后的数据路径
@@ -447,7 +463,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     data_path, 
                     target_column, 
                     task_type,
-                    analysis_result=analysis_result,
+                    analysis_result=exploration_result,  # 使用探索性分析报告
                     cleaning_result=cleaning_result,
                     cleaned_data_path=cleaned_data_path,
                     task_description=task_description
@@ -462,7 +478,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     metadata={
                         "stage": "feature_engineering",
                         "data_path": data_path,
-                        "has_analysis_input": analysis_result is not None,
+                        "has_exploration_input": exploration_result is not None,
                         "has_cleaning_input": cleaning_result is not None,
                         "timestamp": datetime.now().isoformat()
                     }

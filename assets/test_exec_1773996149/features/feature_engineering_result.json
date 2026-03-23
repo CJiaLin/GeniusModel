@@ -1,7 +1,0 @@
-{
-  "success": true,
-  "features_data_path": "/Users/cjialin/code/AutoMLByLLM/assets/test_exec_1773996149/data/features_data.csv",
-  "original_path": "/Users/cjialin/code/AutoMLByLLM/train_cleaned.csv",
-  "timestamp": "2026-03-20T16:53:25.724062",
-  "stage": "feature_engineering"
-}

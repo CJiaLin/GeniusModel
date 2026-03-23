@@ -13,18 +13,18 @@ stages:
     required: true
     description: "数据上传阶段"
   
-  data_analysis:
-    required: true
-    description: "数据分析阶段"
-    skills:
-      - "data-analysis-1.0.2"
-  
   data_cleaning:
-    required: false
-    description: "数据清洗阶段"
+    required: true
+    description: "数据清洗阶段（包含数据质量分析）"
+    skills:
+      - "data-cleaning-1.0.0"
+    confirmation_required: true
+  
+  data_exploration:
+    required: true
+    description: "数据探索性分析阶段（基于清洗后数据）"
     skills:
       - "data-analysis-1.0.2"
-    confirmation_required: true
   
   feature_engineering:
     required: false
