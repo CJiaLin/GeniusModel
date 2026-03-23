@@ -527,22 +527,6 @@ class DataCleaningAgent(ReActAgent):
             print(f"\n[CodeAct] 代码生成失败: {result.error}")
             raise ValueError(f"代码生成失败: {result.error}")
 
-        # 保存代码到资产
-        if code:
-            self.asset_manager.save_code(
-                code=code,
-                filename="cleaning.py",
-                metadata={
-                    "stage": "data_cleaning",
-                    "data_path": self.data_path,
-                    "execution_success": exec_result.success,
-                    "execution_error": exec_result.error,
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-
-        return self.cleaning_code
-
     def execute_cleaning(self, code: str = None) -> Dict[str, Any]:
         """
         执行清洗代码

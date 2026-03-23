@@ -41,7 +41,8 @@ class CodeActAgent:
         self,
         task_prompt: str,
         context: Dict[str, Any] = None,
-        required_outputs: List[str] = None
+        required_outputs: List[str] = None,
+        required_files: List[str] = None
     ) -> CodeActResult:
         """
         生成并执行代码（CodeAct 模式）
@@ -50,6 +51,7 @@ class CodeActAgent:
             task_prompt: 任务提示词
             context: 执行上下文变量
             required_outputs: 需要验证的输出变量名
+            required_files: 需要验证的输出文件路径列表
             
         Returns:
             CodeActResult
@@ -79,6 +81,12 @@ class CodeActAgent:
             
             current_code = code_result["code"]
             
+            # 检查代码完整性
+            if not self._is_code_complete(current_code):
+                last_error = "代码不完整：代码被截断，缺少必要的结束部分。请生成完整的代码，确保包含所有必要的函数调用和数据保存逻辑。"
+                print(f"[CodeAct] 代码不完整，将重试...")
+                continue
+            
             # 执行代码
             print(f"[CodeAct] 执行代码...")
             exec_result = self._execute_code(current_code, context)
@@ -89,6 +97,15 @@ class CodeActAgent:
                     missing = [var for var in required_outputs if var not in exec_result.get("variables", {})]
                     if missing:
                         last_error = f"缺少必需的输出变量: {missing}"
+                        continue
+                
+                # 检查必需的输出文件
+                if required_files:
+                    import os
+                    missing_files = [f for f in required_files if not os.path.exists(f)]
+                    if missing_files:
+                        last_error = f"缺少必需的输出文件: {missing_files}。请确保代码中包含保存这些文件的逻辑。"
+                        print(f"[CodeAct] 缺少输出文件: {missing_files}")
                         continue
                 
                 # 成功
@@ -244,3 +261,38 @@ class CodeActAgent:
             return content[import_start:].strip()
         
         return ""
+    
+    def _is_code_complete(self, code: str) -> bool:
+        """检查代码是否完整"""
+        if not code.strip():
+            return False
+        
+        # 统计括号数量
+        open_parens = code.count('(') - code.count(')')
+        open_brackets = code.count('[') - code.count(']')
+        open_braces = code.count('{') - code.count('}')
+        
+        # 如果有未闭合的括号，代码不完整
+        if open_parens > 0 or open_brackets > 0 or open_braces > 0:
+            print(f"[CodeAct] 检测到未闭合的括号: ()={open_parens}, []={open_brackets}, {{}}={open_braces}")
+            return False
+        
+        # 检查是否以不完整的表达式结尾
+        lines = code.strip().split('\n')
+        if lines:
+            last_line = lines[-1].rstrip()
+            # 检查是否以不完整的表达式结尾
+            if last_line.endswith(('(', '[', '{', ',', '+', '-', '*', '/', '=', ':', '\\')):
+                print(f"[CodeAct] 检测到不完整的表达式结尾: {last_line}")
+                return False
+        
+        # 检查是否有未闭合的字符串（简单检查）
+        # 统计单引号和双引号数量（排除转义的）
+        single_quotes = len(re.findall(r"(?<!\\)'", code))
+        double_quotes = len(re.findall(r'(?<!\\)"', code))
+        
+        if single_quotes % 2 != 0 or double_quotes % 2 != 0:
+            print(f"[CodeAct] 检测到未闭合的字符串: 单引号={single_quotes}, 双引号={double_quotes}")
+            return False
+        
+        return True
