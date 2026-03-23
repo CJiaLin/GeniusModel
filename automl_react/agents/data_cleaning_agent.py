@@ -472,20 +472,20 @@ class DataCleaningAgent(ReActAgent):
         task_prompt = f"""基于以下清洗方案，生成简洁的 Python 代码：
 
 数据路径: {self.data_path}
-输出路径: {cleaned_data_path}
+
+**输出路径（必须使用此路径）: {cleaned_data_path}**
 
 清洗方案摘要:
 1. 删除高缺失率列: PoolQC, MiscFeature, Alley, Fence, MasVnrType
 2. 填充缺失值:
    - 分类变量填充 'None'
    - 数值变量填充 0 或中位数
-3. 保存清洗后的数据到: {cleaned_data_path}
 
 **关键要求：**
-1. 代码必须简洁，不要有冗余的注释和打印语句
-2. 必须在代码开头创建输出目录：os.makedirs(os.path.dirname('{cleaned_data_path}'), exist_ok=True)
-3. 必须在代码末尾保存数据：df.to_csv('{cleaned_data_path}', index=False)
-4. 代码总长度不要超过100行
+1. 必须在代码开头创建输出目录：os.makedirs(os.path.dirname('{cleaned_data_path}'), exist_ok=True)
+2. 必须在代码末尾保存数据：df.to_csv('{cleaned_data_path}', index=False)
+3. 输出路径必须是: {cleaned_data_path}
+4. 代码必须简洁，不要超过100行
 
 请生成简洁的、可执行的 Python 代码。
 """
