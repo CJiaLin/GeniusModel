@@ -469,26 +469,25 @@ class DataCleaningAgent(ReActAgent):
 
         cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
         
-        task_prompt = f"""基于以下清洗方案，生成完整的 Python 代码：
+        task_prompt = f"""基于以下清洗方案，生成简洁的 Python 代码：
 
 数据路径: {self.data_path}
 输出路径: {cleaned_data_path}
-{data_info_text}
 
-清洗方案:
-{self.cleaning_plan}
-
-{modifications_text}
+清洗方案摘要:
+1. 删除高缺失率列: PoolQC, MiscFeature, Alley, Fence, MasVnrType
+2. 填充缺失值:
+   - 分类变量填充 'None'
+   - 数值变量填充 0 或中位数
+3. 保存清洗后的数据到: {cleaned_data_path}
 
 **关键要求：**
-1. 代码必须完整，包含所有必要的导入语句和主函数
-2. 最后必须使用 df.to_csv('{cleaned_data_path}', index=False) 保存清洗后的数据
-3. 必须创建输出目录（如果不存在）：os.makedirs(os.path.dirname('{cleaned_data_path}'), exist_ok=True)
-4. 代码执行后必须生成文件：{cleaned_data_path}
-5. 使用 pandas 进行数据处理，包含详细注释
-6. 必须使用上述实际数据的列名，不要使用示例数据
+1. 代码必须简洁，不要有冗余的注释和打印语句
+2. 必须在代码开头创建输出目录：os.makedirs(os.path.dirname('{cleaned_data_path}'), exist_ok=True)
+3. 必须在代码末尾保存数据：df.to_csv('{cleaned_data_path}', index=False)
+4. 代码总长度不要超过100行
 
-请生成完整的、可执行的 Python 代码。代码末尾必须有保存数据的语句。
+请生成简洁的、可执行的 Python 代码。
 """
 
         # 使用 CodeActAgent 生成并执行代码
