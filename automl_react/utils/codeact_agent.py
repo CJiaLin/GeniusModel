@@ -22,6 +22,7 @@ class CodeActResult:
     error: Optional[str] = None
     iterations: int = 0
     execution_time: float = 0.0
+    execution_error: Optional[str] = None  # 代码执行错误（与生成错误区分）
 
 
 class CodeActAgent:
@@ -98,7 +99,8 @@ class CodeActAgent:
                     code=current_code,
                     output=exec_result.get("output", ""),
                     iterations=iteration + 1,
-                    execution_time=execution_time
+                    execution_time=execution_time,
+                    execution_error=None
                 )
             else:
                 last_error = exec_result.get("error", "代码执行失败")
@@ -111,7 +113,8 @@ class CodeActAgent:
             output="",
             error=f"经过 {self.max_iterations} 次迭代仍无法生成可执行代码。最后错误: {last_error}",
             iterations=self.max_iterations,
-            execution_time=execution_time
+            execution_time=execution_time,
+            execution_error=last_error
         )
     
     def _build_initial_prompt(self, task_prompt: str) -> str:
@@ -221,7 +224,7 @@ class CodeActAgent:
     
     def _extract_code(self, content: str) -> str:
         """从响应中提取代码"""
-        # 尝试匹配 ```python\n(.*?)\n```
+        # 尝试匹配 ```python ... ```
         code_match = re.search(r'```python\n(.*?)\n```', content, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
@@ -244,52 +247,3 @@ class CodeActAgent:
             return content[import_start:].strip()
         
         return ""
-    
-    def _is_code_complete(self, code: str) -> bool:
-        """检查代码是否完整"""
-        if not code.strip():
-            return False
-        
-        # 统计括号数量
-        open_parens = code.count('(') - code.count(')')
-        open_brackets = code.count('[') - code.count(']')
-        open_braces = code.count('{') - code.count('}')
-        
-        # 如果有未闭合的括号，代码不完整
-        if open_parens > 0 or open_brackets > 0 or open_braces > 0:
-            print(f"[CodeAct] 检测到未闭合的括号: ()={open_parens}, []={open_brackets}, {{}}={open_braces}")
-            return False
-        
-        # 检查是否以不完整的表达式结尾
-        lines = code.strip().split('\n')
-        if lines:
-            last_line = lines[-1].rstrip()
-            # 检查是否以不完整的表达式结尾
-            if last_line.endswith(('(', '[', '{', ',', '+', '-', '*', '/', '=', ':', '\\')):
-                print(f"[CodeAct] 检测到不完整的表达式结尾: {last_line}")
-                return False
-            
-            # 检查是否以注释符号结尾（可能被截断）
-            if last_line.rstrip().endswith('#'):
-                print(f"[CodeAct] 检测到不完整的注释: {last_line}")
-                return False
-        
-        # 检查是否有未闭合的字符串
-        single_quotes = len(re.findall(r"(?<!\\)'", code))
-        double_quotes = len(re.findall(r'(?<!\\)"', code))
-        
-        if single_quotes % 2 != 0 or double_quotes % 2 != 0:
-            print(f"[CodeAct] 检测到未闭合的字符串: 单引号={single_quotes}, 双引号={double_quotes}")
-            return False
-        
-        # 检查是否包含必要的代码结构
-        if 'def ' in code:
-            # 检查是否有 if __name__ == '__main__' 或函数调用
-            if "if __name__" not in code and not re.search(r'\w+\s*\([^)]*\)\s*$', code):
-                func_names = re.findall(r'def\s+(\w+)\s*\(', code)
-                has_call = any(re.search(rf'\b{name}\s*\(', code.split(f'def {name}')[1] if f'def {name}' in code else '') for name in func_names)
-                if func_names and not has_call and "if __name__" not in code:
-                    print(f"[CodeAct] 检测到函数定义但缺少函数调用: {func_names}")
-                    return False
-        
-        return True

@@ -480,7 +480,7 @@ class DataCleaningAgent(ReActAgent):
 要求：
 1. 使用 pandas 进行数据处理
 2. 包含详细的注释
-3. 保存清洗后的数据到指定路径: {self.data_path.replace('.csv', '_cleaned.csv')}
+3. 保存清洗后的数据到指定路径: {str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")}
 4. 返回清洗结果统计
 5. 代码必须完整可执行，包含所有必要的导入语句
 6. 必须使用上述实际数据的列名，不要使用示例数据
@@ -492,9 +492,10 @@ class DataCleaningAgent(ReActAgent):
         codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300)
 
         # 准备执行上下文
+        cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
         context = {
             "data_path": self.data_path,
-            "cleaned_data_path": self.data_path.replace('.csv', '_cleaned.csv')
+            "cleaned_data_path": cleaned_data_path
         }
 
         # 生成代码并执行验证
@@ -507,26 +508,40 @@ class DataCleaningAgent(ReActAgent):
         if result.success:
             self.cleaning_code = result.code
             print(f"\n[CodeAct] 代码生成成功，迭代次数: {result.iterations}")
-            return self.cleaning_code
+            
+            # 保存代码到资产
+            if self.cleaning_code:
+                self.asset_manager.save_code(
+                    code=self.cleaning_code,
+                    filename="cleaning.py",
+                    metadata={
+                        "stage": "data_cleaning",
+                        "data_path": self.data_path,
+                        "execution_success": True,
+                        "iterations": result.iterations,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
+            
+            # 检查清洗后的数据文件是否存在于资产目录
+            import os
+            import pandas as pd
+            
+            if os.path.exists(cleaned_data_path):
+                # 验证数据格式和形状
+                try:
+                    df = pd.read_csv(cleaned_data_path)
+                    print(f"[CodeAct] 清洗后数据验证成功: {df.shape[0]} 行 × {df.shape[1]} 列")
+                    return self.cleaning_code
+                except Exception as e:
+                    print(f"[CodeAct] 清洗后数据验证失败: {e}")
+                    raise ValueError(f"清洗后数据验证失败: {e}")
+            else:
+                print(f"[CodeAct] 清洗后数据文件不存在: {cleaned_data_path}")
+                raise ValueError(f"清洗后数据文件不存在: {cleaned_data_path}")
         else:
             print(f"\n[CodeAct] 代码生成失败: {result.error}")
             raise ValueError(f"代码生成失败: {result.error}")
-
-        # 保存代码到资产
-        if code:
-            self.asset_manager.save_code(
-                code=code,
-                filename="cleaning.py",
-                metadata={
-                    "stage": "data_cleaning",
-                    "data_path": self.data_path,
-                    "execution_success": exec_result.success,
-                    "execution_error": exec_result.error,
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-
-        return self.cleaning_code
 
     def execute_cleaning(self, code: str = None) -> Dict[str, Any]:
         """
