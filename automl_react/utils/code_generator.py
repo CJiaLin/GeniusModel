@@ -328,8 +328,13 @@ class CodeGenerator:
     
     def _extract_code_fallback(self, content: str) -> str:
         """备用代码提取方法"""
-        # 尝试匹配 ```python ... ```
+        # 尝试匹配 ```python ... ``` (完整代码块)
         code_match = re.search(r'```python\n(.*?)\n```', content, re.DOTALL)
+        if code_match:
+            return code_match.group(1).strip()
+        
+        # 尝试匹配 ```python ... (不完整的代码块，没有结束的 ```)
+        code_match = re.search(r'```python\n(.*?)(?:\n```|$)', content, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
         
@@ -337,6 +342,22 @@ class CodeGenerator:
         code_match = re.search(r'```\n(.*?)\n```', content, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
+        
+        # 尝试匹配 ``` ... (不完整的代码块)
+        code_match = re.search(r'```\n(.*?)(?:\n```|$)', content, re.DOTALL)
+        if code_match:
+            return code_match.group(1).strip()
+        
+        # 如果包含 import 语句，尝试提取从 import 开始的所有内容
+        if 'import ' in content:
+            import_start = content.find('import ')
+            # 找到 import 前面可能的 'from ' 或直接从 import 开始
+            if import_start > 0 and content[import_start-5:import_start] == 'from ':
+                import_start -= 5
+            return content[import_start:].strip()
+        
+        # 返回空字符串
+        return ""
         
         # 如果无法提取代码，返回空字符串
         return ""
