@@ -159,14 +159,14 @@ class CodeGenerator:
                         code='',
                         success=False
                     )
-                
-        except Exception as e:
-            return CodeGenerationResult(
-                thinking='',
-                code='',
-                success=False,
-                error=str(e)
-            )
+                    
+            except Exception as e:
+                return CodeGenerationResult(
+                    thinking='',
+                    code='',
+                    success=False,
+                    error=str(e)
+                )
     
     def generate_code_with_validation(
         self,
