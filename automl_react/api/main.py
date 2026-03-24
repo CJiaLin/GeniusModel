@@ -82,16 +82,47 @@ class ChatRequest(BaseModel):
 
 # 辅助函数
 def get_session(session_id: str) -> Dict[str, Any]:
-    """获取会话状态"""
+    """获取会话状态（支持从文件恢复）"""
     if session_id not in _sessions:
-        _sessions[session_id] = {
-            "session_id": session_id,
-            "created_at": datetime.now().isoformat(),
-            "workflow_state": None,
-            "confirmation_manager": None,
-            "agents": {},
-            "context": {}
-        }
+        # 尝试从文件恢复 session
+        session_dir = Path("assets") / session_id
+        state_file = session_dir / "state" / "workflow_state.json"
+        
+        if state_file.exists():
+            print(f"[API] 从文件恢复 session: {session_id}")
+            try:
+                with open(state_file) as f:
+                    saved_state = json.load(f)
+                
+                _sessions[session_id] = {
+                    "session_id": session_id,
+                    "created_at": saved_state.get("created_at", datetime.now().isoformat()),
+                    "workflow_state": saved_state,
+                    "confirmation_manager": None,  # 需要重新创建
+                    "agents": {},  # 需要重新创建
+                    "context": saved_state.get("context", {})
+                }
+                print(f"[API] Session 恢复成功，当前阶段: {saved_state.get('current_stage', 'unknown')}")
+            except Exception as e:
+                print(f"[API] Session 恢复失败: {e}，创建新 session")
+                _sessions[session_id] = {
+                    "session_id": session_id,
+                    "created_at": datetime.now().isoformat(),
+                    "workflow_state": None,
+                    "confirmation_manager": None,
+                    "agents": {},
+                    "context": {}
+                }
+        else:
+            # 创建新 session
+            _sessions[session_id] = {
+                "session_id": session_id,
+                "created_at": datetime.now().isoformat(),
+                "workflow_state": None,
+                "confirmation_manager": None,
+                "agents": {},
+                "context": {}
+            }
     return _sessions[session_id]
 
 
