@@ -5,7 +5,7 @@
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from ..core.react_agent import ReActAgent, ConfirmationRequired
@@ -115,7 +115,7 @@ class FeatureEngineeringAgent(ReActAgent):
             target_column: 目标列名
             task_type: 任务类型
             analysis_result: 数据分析报告（可选）
-            cleaning_result: 数据清洗报告（可选）
+            cleaning_result: 数据清洗报告（可选，当前阶段默认不融合该内容）
             cleaned_data_path: 清洗后的数据路径（可选，如果提供则使用此路径）
             task_description: 用户的建模背景和要求
 
@@ -152,19 +152,10 @@ class FeatureEngineeringAgent(ReActAgent):
             context_summary += f"""
 ## 数据分析报告（来自数据分析阶段）
 
-{analysis_result[:3000]}
+{analysis_result}
 
 """
         
-        # 如果有清洗报告，添加到上下文
-        if cleaning_result:
-            context_summary += f"""
-## 数据清洗报告（来自数据清洗阶段）
-
-{cleaning_result[:2000]}
-
-"""
-
         # 加载数据基本信息
         import pandas as pd
 
@@ -204,8 +195,23 @@ class FeatureEngineeringAgent(ReActAgent):
 重要：请基于上述实际数据列名和前序阶段的分析结果生成方案。
 """
 
+            # 用于强约束 LLM 的“事实快照”，避免被前序文本污染。
+            verified_facts = {
+                "data_path": path,
+                "shape": [int(df.shape[0]), int(df.shape[1])],
+                "total_columns": int(len(df.columns)),
+                "numeric_columns_count": int(len(self.data_info['numeric_columns'])),
+                "categorical_columns_count": int(len(self.data_info['categorical_columns'])),
+                "target_column": target,
+                "target_dtype": self.data_info['target_dtype'],
+            }
+
         except Exception as e:
             data_summary = f"无法加载数据文件: {path}\n错误: {str(e)}"
+            verified_facts = {
+                "data_path": path,
+                "error": str(e)
+            }
 
         # 加载 afrexai-ml-engineering skill 的 Phase 2
         skill_content = self.skill_loader.get_skill_content("afrexai-ml-engineering-1.0.0")
@@ -252,6 +258,20 @@ class FeatureEngineeringAgent(ReActAgent):
             data_summary=data_summary,
             skill_content=phase2_content
         )
+
+        user_input += f"""
+
+    ## 严格约束（必须遵守）
+
+    1. 你必须先使用 `load_data` 或 `analyze_data` 对以下路径做实时校验：`{path}`。
+    2. 你输出中的数据规模（行数、列数、数值列数量、类别列数量）必须与工具观察一致。
+    3. 若历史文本（如清洗方案、经验模板）与工具观察冲突，必须以工具观察为准。
+    4. 禁止引用与当前数据文件不一致的列名和统计值。
+
+    ## 已验证数据事实快照（仅用于对齐校验）
+
+    {json.dumps(verified_facts, ensure_ascii=False, indent=2)}
+    """
 
         # 调用 LLM 生成方案
         result = self.run(user_input, stage="feature_engineering_plan")
@@ -362,6 +382,7 @@ class FeatureEngineeringAgent(ReActAgent):
 4. 返回新生成的特征列表
 5. 代码必须完整可执行，包含所有必要的导入语句
 6. 必须使用上述实际数据的列名
+7. 必须包含明确的数据保存语句，将特征工程结果保存到: {self.features_data_path}
 
 请生成完整的、可执行的 Python 代码。
 """
@@ -381,7 +402,9 @@ class FeatureEngineeringAgent(ReActAgent):
             task_prompt=task_prompt,
             context=context,
             required_outputs=[],
-            required_filepath=self.features_data_path
+            required_filepath=self.features_data_path,
+            output_validator=self._validate_features_output,
+            deterministic_fallback=self._deterministic_feature_fallback,
         )
 
         if result.success:
@@ -409,7 +432,128 @@ class FeatureEngineeringAgent(ReActAgent):
             print(f"\n[CodeAct] 代码生成失败: {result.error}")
             raise ValueError(f"代码生成失败: {result.error}")
 
-    def calculate_feature_metrics(self) -> Dict[str, Any]:
+    def _validate_features_output(self, output_path: str, context: Dict[str, Any]) -> Tuple[bool, str]:
+        """特征工程输出校验：文件可读、非空、包含有效特征列。"""
+        import pandas as pd
+
+        df_out = pd.read_csv(output_path)
+        if df_out.shape[0] <= 0:
+            return False, "特征工程输出为空"
+        if df_out.shape[1] <= 0:
+            return False, "特征工程输出无列"
+
+        target = context.get("target_column") or self.target_column
+        non_target_cols = [c for c in df_out.columns if c != target]
+        if len(non_target_cols) <= 0:
+            return False, "特征工程输出缺少可用特征列"
+
+        in_path = context.get("data_path") or self.data_path
+        if in_path:
+            try:
+                df_in = pd.read_csv(in_path)
+                if df_out.shape[0] != df_in.shape[0]:
+                    return False, "特征工程输出行数与输入不一致"
+            except Exception:
+                pass
+
+        return True, f"{df_out.shape[0]} 行 × {df_out.shape[1]} 列"
+
+    def _deterministic_feature_fallback(self, context: Dict[str, Any], output_path: str) -> Tuple[bool, str]:
+        """确定性兜底：无需 LLM，执行基础可复现特征处理并确保落盘。"""
+        import pandas as pd
+
+        in_path = context.get("data_path") or self.data_path
+        target = context.get("target_column") or self.target_column
+        if not in_path:
+            return False, "缺少输入数据路径"
+
+        try:
+            df = pd.read_csv(in_path)
+        except Exception as e:
+            return False, f"读取输入数据失败: {e}"
+
+        if df.empty:
+            return False, "输入数据为空"
+
+        target_series = None
+        if target and target in df.columns:
+            target_series = df[target].copy()
+            X = df.drop(columns=[target]).copy()
+        else:
+            X = df.copy()
+
+        # 基础处理：缺失填充 + 类别编码
+        numeric_cols = X.select_dtypes(include=["number"]).columns
+        for col in numeric_cols:
+            if X[col].isnull().any():
+                med = X[col].median()
+                if pd.notna(med):
+                    X[col] = X[col].fillna(med)
+
+        cat_cols = X.select_dtypes(include=["object", "category", "bool"]).columns
+        for col in cat_cols:
+            X[col] = X[col].fillna("UNKNOWN").astype(str)
+            X[col] = pd.factorize(X[col])[0]
+
+        out_df = X.copy()
+        if target_series is not None:
+            out_df[target] = target_series.values
+
+        try:
+            out_df.to_csv(output_path, index=False)
+            return True, f"确定性特征工程完成并保存到 {output_path}"
+        except Exception as e:
+            return False, f"保存特征工程结果失败: {e}"
+
+    def _generate_markdown_text(self, prompt: str) -> str:
+        """直接生成 Markdown 文本，不经过 CodeAct 执行链路。"""
+        if not self.llm:
+            raise ValueError("LLM 未初始化，无法生成报告")
+
+        full_response = ""
+
+        try:
+            for chunk in self.llm.stream(prompt):
+                if chunk.content:
+                    full_response += chunk.content
+        except Exception:
+            response = self.llm.invoke(prompt)
+            full_response = response.content if hasattr(response, "content") else str(response)
+
+        content = full_response.strip()
+        if content.startswith("```markdown"):
+            content = content[len("```markdown"):]
+        elif content.startswith("```"):
+            content = content[len("```"):]
+        if content.endswith("```"):
+            content = content[:-3]
+
+        content = content.strip()
+        if not content:
+            raise ValueError("模型未生成有效报告内容")
+
+        return content
+
+    def _write_report_file(self, file_path: str, content: str) -> Tuple[bool, str]:
+        """将报告内容写入本地文件并进行存在性校验。"""
+        import os
+
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content.rstrip() + "\n")
+        except Exception as e:
+            return False, f"写入报告失败: {e}"
+
+        if not os.path.exists(file_path):
+            return False, f"报告文件未生成: {file_path}"
+
+        if os.path.getsize(file_path) <= 0:
+            return False, f"报告文件为空: {file_path}"
+
+        return True, file_path
+
+    def calculate_feature_metrics(self, modifications: str = None) -> Dict[str, Any]:
         """
         计算特征指标（使用 CodeAct 模式）
         
@@ -428,6 +572,8 @@ class FeatureEngineeringAgent(ReActAgent):
 
         metrics_result_path = str(self.asset_manager.session_dir / "features" / "feature_metrics.json")
         metrics_report_path = str(self.asset_manager.session_dir / "features" / "feature_metrics_report.md")
+        reliability_report_path = str(self.asset_manager.session_dir / "features" / "feature_reliability_report.md")
+        modifications_text = f"\n用户关注点/补充要求:\n{modifications}\n" if modifications else ""
         
         # ========== 第一步：生成并执行指标计算代码 ==========
         print(f"\n[CodeAct] 第一步：计算特征指标...")
@@ -494,8 +640,8 @@ class FeatureEngineeringAgent(ReActAgent):
         
         print(f"[Agent] 特征指标结果已保存到: {metrics_result_path}")
         
-        # ========== 第二步：生成特征分析报告 ==========
-        print(f"\n[CodeAct] 第二步：生成特征分析报告...")
+        # ========== 第二步：直接生成特征分析报告 ==========
+        print(f"\n[LLM] 第二步：直接生成特征分析报告...")
         
         # 读取指标结果
         with open(metrics_result_path, 'r') as f:
@@ -508,6 +654,7 @@ class FeatureEngineeringAgent(ReActAgent):
 任务类型: {self.task_type}
 指标数据: {json.dumps(metrics_data, indent=2, ensure_ascii=False)}
 报告保存路径: {metrics_report_path}
+    {modifications_text}
 
 请生成详细的特征分析报告（Markdown 格式），包含以下内容：
 
@@ -523,12 +670,23 @@ class FeatureEngineeringAgent(ReActAgent):
 - 低方差特征（方差接近 0）
 - 高缺失率特征（缺失率 > 10%）
 
-## 3. 特征筛选建议
+## 3. 特征可解释性分析
+- 从特征重要性、相关性、IV 等角度解释关键特征对目标的影响
+- 区分稳定贡献特征与可能噪声特征
+- 给出业务可解释的结论（使用自然语言）
+
+## 4. 特征可靠性分析
+- 数据质量可靠性：缺失率、异常值敏感性、低方差特征风险
+- 统计可靠性：高相关冗余、多重共线性风险
+- 泛化可靠性：潜在数据泄漏风险、分布漂移敏感特征提示
+- 给出高/中/低风险特征清单与处理建议
+
+## 5. 特征筛选建议
 - 建议保留的特征列表
 - 建议删除的特征列表及原因
 - 需要进一步处理的特征
 
-## 4. 特征优化建议
+## 6. 特征优化建议
 - 特征工程优化方向
 - 模型选择建议
 - 后续改进方向
@@ -536,27 +694,71 @@ class FeatureEngineeringAgent(ReActAgent):
 请生成完整的 Markdown 格式报告，保存到: {metrics_report_path}
 """
 
-        # 生成报告
-        report_result = codeact.generate_and_execute(
-            task_prompt=report_task_prompt,
-            context={
-                "metrics_data": metrics_data,
-                "metrics_report_path": metrics_report_path
-            },
-            required_outputs=[]
-        )
+        try:
+            report_content = self._generate_markdown_text(report_task_prompt)
+            report_ok, report_msg = self._write_report_file(metrics_report_path, report_content)
+        except Exception as e:
+            print(f"\n[LLM] 特征分析报告生成失败: {e}")
+            return {
+                "success": True,
+                "metrics_result_path": metrics_result_path,
+                "metrics_report_path": None,
+                "feature_reliability_report_path": None,
+                "error": str(e),
+                "features_data_path": self.features_data_path,
+                "timestamp": datetime.now().isoformat()
+            }
 
-        if report_result.success:
-            print(f"\n[CodeAct] 特征分析报告生成成功")
+        if report_ok:
+            print(f"\n[LLM] 特征分析报告生成成功")
+
+            # 额外生成可靠性专题报告（可解释性/可靠性聚焦）
+            reliability_task_prompt = f"""基于以下特征指标，生成一份聚焦“可解释性与可靠性”的专题报告：
+
+特征数据路径: {self.features_data_path}
+目标列: {self.target_column}
+任务类型: {self.task_type}
+指标数据: {json.dumps(metrics_data, indent=2, ensure_ascii=False)}
+报告保存路径: {reliability_report_path}
+{modifications_text}
+
+请输出 Markdown 报告，必须包含：
+1. 执行摘要（3-5 条核心结论）
+2. 可解释性评估：关键特征解释、方向性、稳定贡献
+3. 可靠性评估：冗余风险、低方差风险、缺失风险、泄漏风险
+4. 风险分级清单（高/中/低）
+5. 可执行改进建议（按优先级）
+
+请将内容保存到: {reliability_report_path}
+"""
+            reliability_exists = False
+            reliability_error = None
+            try:
+                reliability_content = self._generate_markdown_text(reliability_task_prompt)
+                reliability_ok, reliability_msg = self._write_report_file(
+                    reliability_report_path,
+                    reliability_content,
+                )
+                reliability_exists = reliability_ok
+                if not reliability_ok:
+                    reliability_error = reliability_msg
+            except Exception as e:
+                reliability_error = str(e)
+                print(f"[LLM] 特征可靠性专题报告生成失败: {e}")
             
             # 检查报告文件是否生成
             if os.path.exists(metrics_report_path):
                 print(f"[Agent] 特征分析报告已保存到: {metrics_report_path}")
+                if reliability_exists:
+                    print(f"[Agent] 特征可靠性专题报告已保存到: {reliability_report_path}")
+                elif reliability_error:
+                    print(f"[Agent] 特征可靠性专题报告未生成: {reliability_error}")
                 
                 return {
                     "success": True,
                     "metrics_result_path": metrics_result_path,
                     "metrics_report_path": metrics_report_path,
+                    "feature_reliability_report_path": reliability_report_path if reliability_exists else None,
                     "features_data_path": self.features_data_path,
                     "timestamp": datetime.now().isoformat()
                 }
@@ -566,16 +768,18 @@ class FeatureEngineeringAgent(ReActAgent):
                     "success": True,
                     "metrics_result_path": metrics_result_path,
                     "metrics_report_path": None,
+                    "feature_reliability_report_path": reliability_report_path if reliability_exists else None,
                     "features_data_path": self.features_data_path,
                     "timestamp": datetime.now().isoformat()
                 }
         else:
-            print(f"\n[CodeAct] 特征分析报告生成失败: {report_result.error}")
+            print(f"\n[LLM] 特征分析报告生成失败: {report_msg}")
             return {
                 "success": True,
                 "metrics_result_path": metrics_result_path,
                 "metrics_report_path": None,
-                "error": report_result.error,
+                "feature_reliability_report_path": None,
+                "error": report_msg,
                 "features_data_path": self.features_data_path,
                 "timestamp": datetime.now().isoformat()
             }

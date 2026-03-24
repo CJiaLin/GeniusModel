@@ -2,17 +2,17 @@
 
 ## 项目简介
 
-基于 **ReAct (Reasoning + Acting)** Agent 架构开发的交互式 AutoML 系统，提供从数据上传到模型部署的完整自动化机器学习建模流程。系统支持用户在每个关键阶段（数据清洗、特征工程、模型训练）进行确认和干预，确保建模过程符合业务需求。
+基于 **ReAct (Reasoning + Acting)** Agent 架构开发的交互式 AutoML 系统，提供从数据接入到模型训练与报告输出的自动化建模流程。系统支持用户在关键阶段（数据清洗、特征工程、模型训练）进行确认和干预，确保建模过程符合业务需求。
 
 ## 核心功能
 
 ### 1. 交互式建模流程
-- **数据上传**: 支持 CSV、Excel、JSON 等多种格式
-- **数据分析**: 自动生成数据质量分析报告
-- **数据清洗**: 生成清洗方案 → 用户确认 → 执行清洗
-- **特征工程**: 生成特征方案 → 用户确认 → 执行特征工程
-- **模型训练**: 生成建模方案 → 用户确认 → 训练模型
-- **结果输出**: 模型文件、全流程脚本、可视化报告
+- **工作流启动**: 指定数据路径、目标列、任务类型与模型
+- **数据清洗**: 自动数据质量分析 + 清洗方案生成 → 用户确认 → 代码生成与执行
+- **数据探索性分析**: 基于清洗后数据进行统计分布与相关性分析
+- **特征工程**: 生成特征方案 → 用户确认 → 代码生成与执行
+- **模型训练**: 生成建模方案 → 用户确认 → 代码生成与训练执行
+- **结果输出**: 模型产物、全流程脚本、建模报告、阶段中间资产
 
 ### 2. 用户确认机制
 每个关键阶段都支持用户确认：
@@ -52,13 +52,13 @@
 AutoMLByLLM/
 ├── automl_react/                 # 核心代码库
 │   ├── agents/                   # Agent 模块
+│   │   ├── data_analysis_agent.py      # 数据分析 Agent（可选能力）
 │   │   ├── data_cleaning_agent.py      # 数据清洗 Agent
+│   │   ├── data_exploration_agent.py   # 探索性分析 Agent
 │   │   ├── feature_engineering_agent.py # 特征工程 Agent
 │   │   ├── model_training_agent.py      # 模型训练 Agent
-│   │   ├── automl_agent.py              # AutoML 主 Agent
-│   │   └── orchestrator.py              # 流程编排器
 │   ├── api/                      # FastAPI 后端
-│   │   └── main.py               # API 主入口（含 SSE 流式输出）
+│   │   └── main.py               # API 主入口（分阶段工作流）
 │   ├── assets/                   # 资产管理
 │   │   └── asset_manager.py      # 资产保存和下载
 │   ├── config/                   # 配置管理
@@ -85,6 +85,9 @@ AutoMLByLLM/
 │   │   ├── data_tools.py         # 数据处理工具
 │   │   ├── feature_tools.py      # 特征工程工具
 │   │   └── model_tools.py        # 模型工具
+│   ├── utils/                    # 代码生成与执行
+│   │   ├── codeact_agent.py      # CodeAct 迭代生成执行
+│   │   └── code_generator.py     # 代码生成与执行验证
 │   ├── workflow/                 # 工作流管理
 │   │   └── workflow_state.py     # 工作流状态
 │   └── README.md
@@ -136,16 +139,16 @@ pip install -r requirements.txt
 编辑 `automl_react/config/llm_config.yaml`：
 
 ```yaml
-default_model: "gpt-4"
+default_model: "kimi-k2.5"
 
 models:
-  gpt-4:
+  kimi-k2.5:
     provider: "openai"
-    model_name: "gpt-4"
-    temperature: 0.1
+    model_name: "kimi-k2.5"
+    temperature: 1.0
     max_tokens: 4096
-    api_key: "${OPENAI_API_KEY}"  # 从环境变量读取
-    base_url: null
+    api_key: "${MOONSHOT_API_KEY}"
+    base_url: "https://api.moonshot.cn/v1"
 ```
 
 支持的环境变量：
@@ -190,24 +193,23 @@ open /Users/cjialin/code/AutoMLByLLM/frontend/index.html
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/workflow/start` | POST | 启动新工作流 |
-| `/workflow/{session_id}/stage/{stage}/run` | POST | 执行指定阶段 |
+| `/workflow/{session_id}/stage/{stage}/run` | POST | 执行指定阶段（data_cleaning / data_exploration / feature_engineering / model_training） |
 | `/confirmation/submit` | POST | 提交用户确认 |
-| `/chat/stream` | POST | 流式对话（SSE） |
+| `/confirmation/{session_id}/pending` | GET | 获取当前待确认点 |
+| `/workflow/{session_id}/status` | GET | 获取工作流状态 |
+| `/chat` | POST | 同步对话 |
+| `/chat/stream` | GET | 流式对话（SSE） |
 | `/assets/{session_id}/{asset_type}/{filename}` | GET | 下载资产文件 |
+| `/assets/{session_id}/list` | GET | 列出会话资产 |
 | `/report/generate` | POST | 生成建模报告 |
 | `/pipeline/generate` | POST | 生成全流程脚本 |
 
 ### 流式对话示例
 
 ```javascript
-const response = await fetch('http://localhost:8000/chat/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        session_id: 'session-123',
-        message: '分析这个数据文件'
-    })
-});
+const response = await fetch(
+  'http://localhost:8000/chat/stream?session_id=session-123&message=' + encodeURIComponent('分析这个数据文件')
+);
 
 const reader = response.body.getReader();
 while (true) {
@@ -237,22 +239,22 @@ feature_engineering:
 ### LLM 配置 (`automl_react/config/llm_config.yaml`)
 
 ```yaml
-default_model: "gpt-4"
+default_model: "kimi-k2.5"
 
 models:
-  gpt-4:
+  kimi-k2.5:
     provider: "openai"
-    model_name: "gpt-4"
-    temperature: 0.1
+    model_name: "kimi-k2.5"
+    temperature: 1.0
     max_tokens: 4096
-    api_key: "${OPENAI_API_KEY}"
-    base_url: null
+    api_key: "${MOONSHOT_API_KEY}"
+    base_url: "https://api.moonshot.cn/v1"
 
 stage_models:
-  data_analysis: "gpt-4"
-  data_cleaning: "gpt-4"
-  feature_engineering: "gpt-4"
-  model_training: "gpt-4"
+  data_analysis: "kimi-k2.5"
+  data_cleaning: "kimi-k2.5"
+  feature_engineering: "kimi-k2.5"
+  model_training: "kimi-k2.5"
 
 logging:
   enabled: true
@@ -262,12 +264,14 @@ logging:
 
 ## 使用流程
 
-1. **上传数据**: 在网页上选择数据文件上传
-2. **数据分析**: 系统自动分析数据质量
-3. **数据清洗**: 
+1. **启动工作流**: 输入会话 ID、数据路径、目标列、任务类型、模型
+2. **数据清洗**: 
    - 系统生成清洗方案（Markdown 格式）
    - 用户确认或修改方案
    - 执行清洗并保存结果
+3. **数据探索性分析**:
+  - 基于清洗后数据生成探索报告
+  - 为特征工程提供统计依据
 4. **特征工程**:
    - 系统生成特征工程方案
    - 用户确认或修改方案

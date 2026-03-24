@@ -5,7 +5,7 @@
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from ..core.react_agent import ReActAgent, ConfirmationRequired
@@ -486,6 +486,7 @@ class DataCleaningAgent(ReActAgent):
 4. 返回清洗结果统计
 5. 代码必须完整可执行，包含所有必要的导入语句
 6. 必须使用上述实际数据的列名，不要使用示例数据
+7. 必须在代码中包含明确的数据保存语句，并将结果保存到: {self.cleaned_data_path}
 
 请生成完整的、可执行的 Python 代码。
 """
@@ -504,7 +505,9 @@ class DataCleaningAgent(ReActAgent):
             task_prompt=task_prompt,
             context=context,
             required_outputs=[],
-            required_filepath=self.cleaned_data_path
+            required_filepath=self.cleaned_data_path,
+            output_validator=self._validate_cleaned_output,
+            deterministic_fallback=self._deterministic_cleaning_fallback,
         )
 
         if result.success:
@@ -528,6 +531,93 @@ class DataCleaningAgent(ReActAgent):
         else:
             print(f"\n[CodeAct] 代码生成失败: {result.error}")
             raise ValueError(f"代码生成失败: {result.error}")
+
+    def _validate_cleaned_output(self, output_path: str, context: Dict[str, Any]) -> Tuple[bool, str]:
+        """数据清洗输出校验：文件可读、非空、列结构有效。"""
+        import pandas as pd
+
+        df_out = pd.read_csv(output_path)
+        if df_out.shape[0] <= 0:
+            return False, "清洗输出为空"
+        if df_out.shape[1] <= 0:
+            return False, "清洗输出无列"
+
+        in_path = context.get("data_path") or self.data_path
+        if in_path:
+            try:
+                df_in = pd.read_csv(in_path)
+                if df_out.shape[0] > max(df_in.shape[0] * 1.2, df_in.shape[0] + 1000):
+                    return False, "清洗后行数异常膨胀"
+            except Exception:
+                pass
+
+        return True, f"{df_out.shape[0]} 行 × {df_out.shape[1]} 列"
+
+    def _deterministic_cleaning_fallback(self, context: Dict[str, Any], output_path: str) -> Tuple[bool, str]:
+        """确定性兜底：无需 LLM，执行基础清洗并确保落盘。"""
+        import pandas as pd
+
+        in_path = context.get("data_path") or self.data_path
+        if not in_path:
+            return False, "缺少输入数据路径"
+
+        try:
+            df = pd.read_csv(in_path)
+        except Exception as e:
+            return False, f"读取输入数据失败: {e}"
+
+        if df.empty:
+            return False, "输入数据为空"
+
+        # 基础清洗：去重 + 缺失值填充
+        df = df.drop_duplicates()
+
+        numeric_cols = df.select_dtypes(include=["number"]).columns
+        for col in numeric_cols:
+            if df[col].isnull().any():
+                med = df[col].median()
+                if pd.notna(med):
+                    df[col] = df[col].fillna(med)
+
+        other_cols = [c for c in df.columns if c not in numeric_cols]
+        for col in other_cols:
+            if df[col].isnull().any():
+                mode_series = df[col].mode(dropna=True)
+                fill_val = mode_series.iloc[0] if not mode_series.empty else "UNKNOWN"
+                df[col] = df[col].fillna(fill_val)
+
+        try:
+            df.to_csv(output_path, index=False)
+            return True, f"确定性清洗完成并保存到 {output_path}"
+        except Exception as e:
+            return False, f"保存清洗结果失败: {e}"
+
+    def _append_cleaned_data_save_fallback(self, code: str) -> str:
+        """为清洗代码补充结果落盘语句，避免因未保存文件导致流程失败。"""
+        if not code or not code.strip():
+            return code
+
+        # 若代码已明确写入目标文件，则不重复追加。
+        if self.cleaned_data_path in code and (
+            "to_csv(" in code or "to_parquet(" in code or "to_pickle(" in code
+        ):
+            return code
+
+        fallback_block = f"""
+
+# Fallback save block injected by DataCleaningAgent
+try:
+    if 'df' in locals() and hasattr(df, 'to_csv'):
+        df.to_csv(r'{self.cleaned_data_path}', index=False)
+        print('Fallback save using df completed')
+    elif 'cleaned_df' in locals() and hasattr(cleaned_df, 'to_csv'):
+        cleaned_df.to_csv(r'{self.cleaned_data_path}', index=False)
+        print('Fallback save using cleaned_df completed')
+except Exception as _fallback_error:
+    print(f'Fallback save failed: {{_fallback_error}}')
+"""
+
+        return code.rstrip() + "\n" + fallback_block
 
     def execute_cleaning(self, code: str = None) -> Dict[str, Any]:
         """

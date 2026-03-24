@@ -6,15 +6,15 @@ AutoML ReAct 核心模块，提供交互式建模的完整功能。
 
 ### agents/
 Agent 实现模块：
+- `data_analysis_agent.py` - 数据分析 Agent（可选能力）
 - `data_cleaning_agent.py` - 数据清洗 Agent
+- `data_exploration_agent.py` - 探索性数据分析 Agent
 - `feature_engineering_agent.py` - 特征工程 Agent
 - `model_training_agent.py` - 模型训练 Agent
-- `automl_agent.py` - AutoML 主 Agent
-- `orchestrator.py` - 流程编排器
 
 ### api/
 FastAPI 后端服务：
-- `main.py` - API 主入口，包含所有端点
+- `main.py` - API 主入口，提供分阶段工作流与确认执行
 
 ### assets/
 资产管理模块：
@@ -63,6 +63,22 @@ Skills 加载：
 ### workflow/
 工作流管理：
 - `workflow_state.py` - 工作流状态管理
+
+### utils/
+代码生成与执行：
+- `codeact_agent.py` - CodeAct 迭代生成与执行
+- `code_generator.py` - 代码生成与执行验证
+
+## 当前主流程
+
+1. 启动工作流（/workflow/start）
+2. 数据清洗（生成方案并确认执行）
+3. 数据探索性分析（基于清洗后数据）
+4. 特征工程（生成方案并确认执行）
+5. 模型训练（生成方案并确认执行）
+6. 生成报告与全流程脚本
+
+说明：旧版单体编排链路模块已移除，当前统一以 api/main.py 的分阶段接口为准。
 
 ## 使用示例
 

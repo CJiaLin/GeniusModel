@@ -1,7 +1,0 @@
-{
-  "success": true,
-  "cleaned_data_path": "/Users/cjialin/code/AutoMLByLLM/assets/test_new_workflow_1774319996/data/cleaned_data.csv",
-  "original_path": "/Users/cjialin/code/AutoMLByLLM/train.csv",
-  "timestamp": "2026-03-24T10:42:51.682293",
-  "stage": "data_cleaning"
-}

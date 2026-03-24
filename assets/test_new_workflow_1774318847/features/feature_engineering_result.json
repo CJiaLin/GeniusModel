@@ -1,8 +1,0 @@
-{
-  "success": false,
-  "features_data_path": null,
-  "original_path": "/Users/cjialin/code/AutoMLByLLM/train.csv",
-  "timestamp": "2026-03-24T10:30:12.976476",
-  "stage": "feature_engineering",
-  "metrics_report_path": null
-}

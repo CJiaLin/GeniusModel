@@ -8,9 +8,10 @@ CodeAct 模式：LLM 生成代码 → 执行代码 → 观察执行结果 → �
 import json
 import os
 import re
+import ast
 import time
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 import pandas as pd
@@ -47,6 +48,9 @@ class CodeActAgent:
         context: Dict[str, Any] = None,
         required_outputs: List[str] = None,
         required_filepath: str = None,
+        output_validator: Optional[Callable[[str, Dict[str, Any]], Tuple[bool, str]]] = None,
+        deterministic_fallback: Optional[Callable[[Dict[str, Any], str], Tuple[bool, str]]] = None,
+        syntax_check: bool = True,
     ) -> CodeActResult:
         """
         生成并执行代码（CodeAct 模式）
@@ -56,6 +60,9 @@ class CodeActAgent:
             context: 执行上下文变量
             required_outputs: 需要验证的输出变量名
             required_filepath: 需要验证的输出文件路径
+            output_validator: 输出文件校验函数，返回 (是否通过, 说明)
+            deterministic_fallback: 确定性兜底函数，返回 (是否成功, 说明)
+            syntax_check: 是否进行代码语法完整性校验
             
         Returns:
             CodeActResult
@@ -85,6 +92,13 @@ class CodeActAgent:
                 continue
             
             current_code = code_result["code"]
+
+            # L1: 代码完整性校验（语法/结构）
+            if syntax_check:
+                syntax_ok, syntax_msg = self._validate_code_syntax(current_code)
+                if not syntax_ok:
+                    last_error = syntax_msg
+                    continue
             
             # 执行代码
             print(f"[CodeAct] 执行代码...")
@@ -100,16 +114,13 @@ class CodeActAgent:
                 
                 # 检查必需的输出文件
                 if required_filepath:
-                    if os.path.isfile(required_filepath):
-                        print(f"[CodeAct] 输出文件已生成: {required_filepath}")
-                        try:
-                            df = pd.read_csv(required_filepath)
-                            print(f"[CodeAct] 数据验证成功: {df.shape[0]} 行 × {df.shape[1]} 列")
-                        except Exception as e:
-                            last_error = f"输出文件格式错误: {e}"
-                            continue
-                    else:
-                        last_error = f"输出文件未生成: {required_filepath}\n请确保代码末尾有保存数据的语句，例如: df.to_csv('{required_filepath}', index=False)"
+                    file_ok, file_msg = self._validate_required_file(
+                        required_filepath,
+                        context or {},
+                        output_validator,
+                    )
+                    if not file_ok:
+                        last_error = file_msg
                         continue
             
 
@@ -126,6 +137,24 @@ class CodeActAgent:
             else:
                 last_error = exec_result.get("error", "代码执行失败")
         
+        # L3: 确定性兜底（仅在需要落盘且提供兜底函数时触发）
+        if deterministic_fallback and required_filepath:
+            try:
+                ok, msg = deterministic_fallback(context or {}, required_filepath)
+                if ok and os.path.isfile(required_filepath):
+                    execution_time = time.time() - start_time
+                    return CodeActResult(
+                        success=True,
+                        code=current_code,
+                        output=f"Deterministic fallback applied: {msg}",
+                        iterations=self.max_iterations,
+                        execution_time=execution_time,
+                        execution_error=None,
+                    )
+                last_error = f"确定性兜底失败: {msg}"
+            except Exception as e:
+                last_error = f"确定性兜底异常: {e}"
+
         # 所有迭代都失败
         execution_time = time.time() - start_time
         return CodeActResult(
@@ -137,6 +166,49 @@ class CodeActAgent:
             execution_time=execution_time,
             execution_error=last_error
         )
+
+    def _validate_code_syntax(self, code: str) -> Tuple[bool, str]:
+        """校验代码是否可解析，避免明显不完整代码进入执行阶段。"""
+        if not code or not code.strip():
+            return False, "代码为空"
+
+        try:
+            ast.parse(code)
+            return True, "ok"
+        except SyntaxError as e:
+            return False, f"代码语法不完整: {e}"
+
+    def _validate_required_file(
+        self,
+        required_filepath: str,
+        context: Dict[str, Any],
+        output_validator: Optional[Callable[[str, Dict[str, Any]], Tuple[bool, str]]] = None,
+    ) -> Tuple[bool, str]:
+        """统一输出文件验证：存在性 + 可选业务校验。"""
+        if not os.path.isfile(required_filepath):
+            return (
+                False,
+                f"输出文件未生成: {required_filepath}\n"
+                f"请确保代码末尾有保存数据的语句，例如: df.to_csv('{required_filepath}', index=False)",
+            )
+
+        print(f"[CodeAct] 输出文件已生成: {required_filepath}")
+
+        if output_validator:
+            ok, msg = output_validator(required_filepath, context)
+            if not ok:
+                return False, f"输出文件业务校验失败: {msg}"
+            print(f"[CodeAct] 输出业务校验通过: {msg}")
+            return True, msg
+
+        try:
+            df = pd.read_csv(required_filepath)
+            if df.shape[0] <= 0 or df.shape[1] <= 0:
+                return False, "输出文件为空或无有效列"
+            print(f"[CodeAct] 数据验证成功: {df.shape[0]} 行 × {df.shape[1]} 列")
+            return True, "ok"
+        except Exception as e:
+            return False, f"输出文件格式错误: {e}"
     
     def _build_initial_prompt(self, task_prompt: str) -> str:
         """构建初始提示词"""
@@ -218,7 +290,8 @@ class CodeActAgent:
         """执行代码"""
         # 准备执行环境
         local_vars = context.copy() if context else {}
-        local_vars['__name__'] = '__executor__'
+        # Use script-like execution context so `if __name__ == "__main__"` blocks run.
+        local_vars['__name__'] = '__main__'
         local_vars['__builtins__'] = __builtins__
         
         try:
@@ -226,7 +299,7 @@ class CodeActAgent:
             exec(code, local_vars)
             
             # 删除内部变量
-            for key in ['__Name__', '__builtins__', '__executor__']:
+            for key in ['__name__', '__builtins__']:
                 if key in local_vars:
                     del local_vars[key]
             

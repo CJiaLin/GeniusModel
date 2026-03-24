@@ -527,7 +527,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     target_column, 
                     task_type,
                     analysis_result=exploration_result,  # 使用探索性分析报告
-                    cleaning_result=cleaning_result,
+                    cleaning_result=None,
                     cleaned_data_path=cleaned_data_path,
                     task_description=task_description
                 )
@@ -688,6 +688,7 @@ async def submit_confirmation(request: UserConfirmationRequest):
     
     # 执行结果
     execution_result = None
+    next_confirmation_point = None
     
     # 如果用户确认或修改，执行相应操作
     if status in [ConfirmationStatus.CONFIRMED, ConfirmationStatus.MODIFIED]:
@@ -700,9 +701,38 @@ async def submit_confirmation(request: UserConfirmationRequest):
                 execution_result = await execute_feature_engineering(
                     session, data_path, target_column, task_type, request.modifications
                 )
+                # 特征工程完成后，提示用户可选执行特征评估（非强制）
+                if execution_result.get("success"):
+                    evaluation_proposal = """## 是否进行特征评估（可选）
+
+特征工程已执行完成。你可以选择继续进行特征评估，系统将：
+
+1. 由 LLM 生成特征评估代码并执行
+2. 基于执行结果生成分析报告，重点覆盖：
+   - 特征可解释性（重要性、相关性、信息价值等）
+   - 特征可靠性（缺失率、稳定性风险、低方差/高冗余等）
+   - 特征筛选与优化建议
+
+请选择：
+- `confirmed`：执行特征评估
+- `skipped`：跳过特征评估，继续后续流程
+"""
+                    next_confirmation_point = confirmation_manager.add_confirmation_point(
+                        stage="feature_evaluation",
+                        proposal_content=evaluation_proposal,
+                        expected_outcome="生成特征可解释性与可靠性分析报告",
+                        metadata={
+                            "stage": "feature_evaluation",
+                            "features_data_path": execution_result.get("features_data_path")
+                        }
+                    )
             elif stage == "model_training":
                 execution_result = await execute_model_training(
                     session, data_path, target_column, task_type, request.modifications
+                )
+            elif stage == "feature_evaluation":
+                execution_result = await execute_feature_evaluation(
+                    session, request.modifications
                 )
         except Exception as e:
             return JSONResponse(
@@ -731,6 +761,14 @@ async def submit_confirmation(request: UserConfirmationRequest):
         
         if execution_result:
             response["execution"] = execution_result
+
+        if next_confirmation_point:
+            response["next_confirmation"] = {
+                "requires_confirmation": True,
+                "stage": "feature_evaluation",
+                "confirmation_id": next_confirmation_point.id,
+                "proposal": next_confirmation_point.proposal_content
+            }
         
         return response
         
@@ -847,18 +885,6 @@ async def execute_feature_engineering(
     if not file_exists:
         print(f"[API] 警告: 特征工程后的数据文件不存在: {features_data_path}")
 
-    # 计算特征指标（如果特征工程成功）
-    metrics_result = None
-    if file_exists:
-        print(f"[API] 开始计算特征指标...")
-        try:
-            metrics_result = agent.calculate_feature_metrics()
-            print(f"[API] 特征指标计算完成")
-        except Exception as e:
-            print(f"[API] 特征指标计算失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
     # 构建执行结果
     execution_result = {
         "success": file_exists,
@@ -866,7 +892,8 @@ async def execute_feature_engineering(
         "original_path": data_path,
         "timestamp": datetime.now().isoformat(),
         "stage": "feature_engineering",
-        "metrics_report_path": metrics_result.get("metrics_report_path") if metrics_result else None
+        "evaluation_available": file_exists,
+        "evaluation_required_confirmation": file_exists
     }
 
     # 保存结果到资产（用于报告生成）
@@ -880,6 +907,39 @@ async def execute_feature_engineering(
     print(f"[API] ========== 特征工程执行完成 ==========")
     
     return execution_result
+
+
+async def execute_feature_evaluation(session: Dict, modifications: Optional[str] = None) -> Dict:
+    """执行特征评估（可解释性与可靠性分析）"""
+    print(f"[API] ========== 开始执行特征评估 ==========")
+
+    agent = session["agents"].get("feature")
+    if not agent:
+        raise ValueError("特征工程 Agent 不存在")
+
+    # 执行特征评估（LLM 生成评估代码并执行 + 生成分析报告）
+    result = agent.calculate_feature_metrics(modifications=modifications)
+
+    # 保存结果到资产（用于报告生成）
+    asset_manager = get_asset_manager(session_id=session.get("session_id", "default"))
+    payload = {
+        "success": result.get("success", False),
+        "metrics_result_path": result.get("metrics_result_path"),
+        "metrics_report_path": result.get("metrics_report_path"),
+        "feature_reliability_report_path": result.get("feature_reliability_report_path"),
+        "features_data_path": result.get("features_data_path"),
+        "timestamp": result.get("timestamp", datetime.now().isoformat()),
+        "stage": "feature_evaluation"
+    }
+    asset_manager.save_data(
+        data=json.dumps(payload, ensure_ascii=False, indent=2),
+        filename="feature_evaluation_result.json",
+        asset_type="features",
+        metadata=payload
+    )
+
+    print(f"[API] ========== 特征评估执行完成 ==========")
+    return payload
 
 
 async def execute_model_training(
