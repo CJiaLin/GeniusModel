@@ -412,41 +412,51 @@ class FeatureEngineeringAgent(ReActAgent):
         """
         计算特征指标（使用 CodeAct 模式）
         
-        计算 IV 值、相关性、重要性等技术指标，
-        并生成特征分析报告。
+        分两步执行：
+        1. 生成并执行指标计算代码
+        2. 根据执行结果生成特征分析报告
         
         Returns:
             特征指标结果
         """
         import os
-        import pandas as pd
+        import json
         
         if not self.features_data_path or not os.path.exists(self.features_data_path):
             raise ValueError("请先执行特征工程代码生成特征数据")
 
+        metrics_result_path = str(self.asset_manager.session_dir / "features" / "feature_metrics.json")
         metrics_report_path = str(self.asset_manager.session_dir / "features" / "feature_metrics_report.md")
         
-        task_prompt = f"""基于以下特征数据，计算特征指标并生成分析报告：
+        # ========== 第一步：生成并执行指标计算代码 ==========
+        print(f"\n[CodeAct] 第一步：计算特征指标...")
+        
+        metrics_task_prompt = f"""基于以下特征数据，计算特征指标：
 
 特征数据路径: {self.features_data_path}
 目标列: {self.target_column}
 任务类型: {self.task_type}
-报告保存路径: {metrics_report_path}
+指标结果保存路径: {metrics_result_path}
 
-请计算以下指标：
+请计算以下指标并保存为 JSON 文件：
 1. **IV 值（Information Value）**：评估特征对目标的预测能力
+   - 对于分类任务：计算每个特征的 IV 值
+   - 对于回归任务：将目标离散化后计算 IV 值
 2. **相关性分析**：计算特征与目标的相关系数
 3. **特征重要性**：使用随机森林计算特征重要性
 4. **方差分析**：计算特征的方差，识别低方差特征
 5. **缺失率统计**：统计每个特征的缺失率
 
 输出要求：
-1. 生成详细的特征指标分析报告（Markdown 格式）
-2. 报告保存到: {metrics_report_path}
-3. 报告包含：
-   - 各指标计算结果表格
-   - 特征筛选建议
-   - 特征优化建议
+1. 将所有指标结果保存为 JSON 文件: {metrics_result_path}
+2. JSON 格式示例：
+{{
+    "iv_values": {{"feature1": 0.5, "feature2": 0.3, ...}},
+    "correlations": {{"feature1": 0.8, "feature2": 0.6, ...}},
+    "feature_importance": {{"feature1": 0.15, "feature2": 0.12, ...}},
+    "variances": {{"feature1": 1.5, "feature2": 0.8, ...}},
+    "missing_rates": {{"feature1": 0.0, "feature2": 0.05, ...}}
+}}
 
 请生成完整的、可执行的 Python 代码。
 """
@@ -460,38 +470,114 @@ class FeatureEngineeringAgent(ReActAgent):
             "features_data_path": self.features_data_path,
             "target_column": self.target_column,
             "task_type": self.task_type,
-            "metrics_report_path": metrics_report_path
+            "metrics_result_path": metrics_result_path
         }
 
         # 生成代码并执行验证
         result = codeact.generate_and_execute(
-            task_prompt=task_prompt,
+            task_prompt=metrics_task_prompt,
             context=context,
             required_outputs=[]
         )
 
-        if result.success:
-            print(f"\n[CodeAct] 特征指标计算成功，迭代次数: {result.iterations}")
+        if not result.success:
+            print(f"\n[CodeAct] 特征指标计算失败: {result.error}")
+            raise ValueError(f"特征指标计算失败: {result.error}")
+
+        print(f"\n[CodeAct] 特征指标计算成功，迭代次数: {result.iterations}")
+        
+        # 检查指标结果文件是否生成
+        if not os.path.exists(metrics_result_path):
+            print(f"[Agent] 警告: 特征指标结果文件未生成")
+            return {"success": False, "error": "特征指标结果文件未生成"}
+        
+        print(f"[Agent] 特征指标结果已保存到: {metrics_result_path}")
+        
+        # ========== 第二步：生成特征分析报告 ==========
+        print(f"\n[CodeAct] 第二步：生成特征分析报告...")
+        
+        # 读取指标结果
+        with open(metrics_result_path, 'r') as f:
+            metrics_data = json.load(f)
+        
+        report_task_prompt = f"""基于以下特征指标数据，生成详细的特征分析报告：
+
+特征数据路径: {self.features_data_path}
+目标列: {self.target_column}
+任务类型: {self.task_type}
+指标数据: {json.dumps(metrics_data, indent=2, ensure_ascii=False)}
+报告保存路径: {metrics_report_path}
+
+请生成详细的特征分析报告（Markdown 格式），包含以下内容：
+
+## 1. 指标概览
+- 各指标计算结果汇总表格
+- 指标分布统计
+
+## 2. 特征评估
+- 高预测能力特征（IV > 0.3）
+- 中等预测能力特征（0.1 < IV <= 0.3）
+- 低预测能力特征（IV <= 0.1）
+- 高相关性特征（|corr| > 0.7）
+- 低方差特征（方差接近 0）
+- 高缺失率特征（缺失率 > 10%）
+
+## 3. 特征筛选建议
+- 建议保留的特征列表
+- 建议删除的特征列表及原因
+- 需要进一步处理的特征
+
+## 4. 特征优化建议
+- 特征工程优化方向
+- 模型选择建议
+- 后续改进方向
+
+请生成完整的 Markdown 格式报告，保存到: {metrics_report_path}
+"""
+
+        # 生成报告
+        report_result = codeact.generate_and_execute(
+            task_prompt=report_task_prompt,
+            context={
+                "metrics_data": metrics_data,
+                "metrics_report_path": metrics_report_path
+            },
+            required_outputs=[]
+        )
+
+        if report_result.success:
+            print(f"\n[CodeAct] 特征分析报告生成成功")
             
             # 检查报告文件是否生成
             if os.path.exists(metrics_report_path):
-                print(f"[Agent] 特征指标报告已保存到: {metrics_report_path}")
+                print(f"[Agent] 特征分析报告已保存到: {metrics_report_path}")
                 
-                # 保存指标结果
-                metrics_result = {
+                return {
                     "success": True,
+                    "metrics_result_path": metrics_result_path,
                     "metrics_report_path": metrics_report_path,
                     "features_data_path": self.features_data_path,
                     "timestamp": datetime.now().isoformat()
                 }
-                
-                return metrics_result
             else:
-                print(f"[Agent] 警告: 特征指标报告未生成")
-                return {"success": False, "error": "特征指标报告未生成"}
+                print(f"[Agent] 警告: 特征分析报告未生成")
+                return {
+                    "success": True,
+                    "metrics_result_path": metrics_result_path,
+                    "metrics_report_path": None,
+                    "features_data_path": self.features_data_path,
+                    "timestamp": datetime.now().isoformat()
+                }
         else:
-            print(f"\n[CodeAct] 特征指标计算失败: {result.error}")
-            raise ValueError(f"特征指标计算失败: {result.error}")
+            print(f"\n[CodeAct] 特征分析报告生成失败: {report_result.error}")
+            return {
+                "success": True,
+                "metrics_result_path": metrics_result_path,
+                "metrics_report_path": None,
+                "error": report_result.error,
+                "features_data_path": self.features_data_path,
+                "timestamp": datetime.now().isoformat()
+            }
 
     def execute_feature_engineering(self, code: str = None) -> Dict[str, Any]:
         """
