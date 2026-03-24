@@ -408,6 +408,91 @@ class FeatureEngineeringAgent(ReActAgent):
             print(f"\n[CodeAct] 代码生成失败: {result.error}")
             raise ValueError(f"代码生成失败: {result.error}")
 
+    def calculate_feature_metrics(self) -> Dict[str, Any]:
+        """
+        计算特征指标（使用 CodeAct 模式）
+        
+        计算 IV 值、相关性、重要性等技术指标，
+        并生成特征分析报告。
+        
+        Returns:
+            特征指标结果
+        """
+        import os
+        import pandas as pd
+        
+        if not self.features_data_path or not os.path.exists(self.features_data_path):
+            raise ValueError("请先执行特征工程代码生成特征数据")
+
+        metrics_report_path = str(self.asset_manager.session_dir / "features" / "feature_metrics_report.md")
+        
+        task_prompt = f"""基于以下特征数据，计算特征指标并生成分析报告：
+
+特征数据路径: {self.features_data_path}
+目标列: {self.target_column}
+任务类型: {self.task_type}
+报告保存路径: {metrics_report_path}
+
+请计算以下指标：
+1. **IV 值（Information Value）**：评估特征对目标的预测能力
+2. **相关性分析**：计算特征与目标的相关系数
+3. **特征重要性**：使用随机森林计算特征重要性
+4. **方差分析**：计算特征的方差，识别低方差特征
+5. **缺失率统计**：统计每个特征的缺失率
+
+输出要求：
+1. 生成详细的特征指标分析报告（Markdown 格式）
+2. 报告保存到: {metrics_report_path}
+3. 报告包含：
+   - 各指标计算结果表格
+   - 特征筛选建议
+   - 特征优化建议
+
+请生成完整的、可执行的 Python 代码。
+"""
+
+        # 使用 CodeActAgent 生成并执行代码
+        from ..utils.codeact_agent import CodeActAgent
+        
+        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300)
+        
+        context = {
+            "features_data_path": self.features_data_path,
+            "target_column": self.target_column,
+            "task_type": self.task_type,
+            "metrics_report_path": metrics_report_path
+        }
+
+        # 生成代码并执行验证
+        result = codeact.generate_and_execute(
+            task_prompt=task_prompt,
+            context=context,
+            required_outputs=[]
+        )
+
+        if result.success:
+            print(f"\n[CodeAct] 特征指标计算成功，迭代次数: {result.iterations}")
+            
+            # 检查报告文件是否生成
+            if os.path.exists(metrics_report_path):
+                print(f"[Agent] 特征指标报告已保存到: {metrics_report_path}")
+                
+                # 保存指标结果
+                metrics_result = {
+                    "success": True,
+                    "metrics_report_path": metrics_report_path,
+                    "features_data_path": self.features_data_path,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                return metrics_result
+            else:
+                print(f"[Agent] 警告: 特征指标报告未生成")
+                return {"success": False, "error": "特征指标报告未生成"}
+        else:
+            print(f"\n[CodeAct] 特征指标计算失败: {result.error}")
+            raise ValueError(f"特征指标计算失败: {result.error}")
+
     def execute_feature_engineering(self, code: str = None) -> Dict[str, Any]:
         """
         执行特征工程代码

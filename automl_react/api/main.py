@@ -784,13 +784,26 @@ async def execute_feature_engineering(
     if not file_exists:
         print(f"[API] 警告: 特征工程后的数据文件不存在: {features_data_path}")
 
+    # 计算特征指标（如果特征工程成功）
+    metrics_result = None
+    if file_exists:
+        print(f"[API] 开始计算特征指标...")
+        try:
+            metrics_result = agent.calculate_feature_metrics()
+            print(f"[API] 特征指标计算完成")
+        except Exception as e:
+            print(f"[API] 特征指标计算失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
     # 构建执行结果
     execution_result = {
         "success": file_exists,
         "features_data_path": features_data_path if file_exists else None,
         "original_path": data_path,
         "timestamp": datetime.now().isoformat(),
-        "stage": "feature_engineering"
+        "stage": "feature_engineering",
+        "metrics_report_path": metrics_result.get("metrics_report_path") if metrics_result else None
     }
 
     # 保存结果到资产（用于报告生成）
