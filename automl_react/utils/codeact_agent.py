@@ -46,6 +46,7 @@ class CodeActAgent:
         task_prompt: str,
         context: Dict[str, Any] = None,
         required_outputs: List[str] = None,
+        required_filepath: str = None,
     ) -> CodeActResult:
         """
         生成并执行代码（CodeAct 模式）
@@ -54,6 +55,7 @@ class CodeActAgent:
             task_prompt: 任务提示词
             context: 执行上下文变量
             required_outputs: 需要验证的输出变量名
+            required_filepath: 需要验证的输出文件路径
             
         Returns:
             CodeActResult
@@ -94,6 +96,20 @@ class CodeActAgent:
                     missing = [var for var in required_outputs if var not in exec_result.get("variables", {})]
                     if missing:
                         last_error = f"缺少必需的输出变量: {missing}"
+                        continue
+                
+                # 检查必需的输出文件
+                if required_filepath:
+                    if os.path.isfile(required_filepath):
+                        print(f"[CodeAct] 输出文件已生成: {required_filepath}")
+                        try:
+                            df = pd.read_csv(required_filepath)
+                            print(f"[CodeAct] 数据验证成功: {df.shape[0]} 行 × {df.shape[1]} 列")
+                        except Exception as e:
+                            last_error = f"输出文件格式错误: {e}"
+                            continue
+                    else:
+                        last_error = f"输出文件未生成: {required_filepath}\n请确保代码末尾有保存数据的语句，例如: df.to_csv('{required_filepath}', index=False)"
                         continue
             
 
