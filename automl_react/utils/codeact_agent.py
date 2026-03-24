@@ -246,25 +246,42 @@ class CodeActAgent:
     def _extract_code(self, content: str) -> str:
         """从响应中提取代码"""
         # 尝试匹配 ```python ... ```
-        code_match = re.search(r'```python\n(.*?)\n```', content, re.DOTALL)
+        code_match = re.search(r'```python\s*\n(.*?)\n```', content, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
         
         # 尝试匹配 ```python ... (不完整的代码块)
-        code_match = re.search(r'```python\n(.*?)(?:\n```|$)', content, re.DOTALL)
+        code_match = re.search(r'```python\s*\n(.*?)(?:\n```|$)', content, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
         
         # 尝试匹配 ``` ... ```
-        code_match = re.search(r'```\n(.*?)\n```', content, re.DOTALL)
+        code_match = re.search(r'```\s*\n(.*?)\n```', content, re.DOTALL)
         if code_match:
             return code_match.group(1).strip()
         
+        # 尝试匹配 ```...``` (没有换行的代码块)
+        code_match = re.search(r'```(.*?)```', content, re.DOTALL)
+        if code_match:
+            code = code_match.group(1).strip()
+            # 如果代码以 python 开头，去掉它
+            if code.startswith('python'):
+                code = code[6:].strip()
+            return code
+        
         # 如果包含 import 语句，提取从 import 开始的内容
-        if 'import ' in content:
-            import_start = content.find('import ')
-            if import_start > 0 and content[import_start-5:import_start] == 'from ':
-                import_start -= 5
-            return content[import_start:].strip()
+        if 'import ' in content or 'def ' in content or 'class ' in content:
+            # 找到第一个 import、def 或 class 的位置
+            import_pos = content.find('import ')
+            def_pos = content.find('def ')
+            class_pos = content.find('class ')
+            
+            positions = [p for p in [import_pos, def_pos, class_pos] if p >= 0]
+            if positions:
+                start_pos = min(positions)
+                # 检查是否是 from ... import
+                if start_pos > 0 and content[start_pos-5:start_pos] == 'from ':
+                    start_pos -= 5
+                return content[start_pos:].strip()
         
         return ""
