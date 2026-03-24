@@ -91,18 +91,18 @@ def get_session(session_id: str) -> Dict[str, Any]:
         if state_file.exists():
             print(f"[API] 从文件恢复 session: {session_id}")
             try:
-                with open(state_file) as f:
-                    saved_state = json.load(f)
+                # 使用 WorkflowState.load 方法加载状态
+                workflow_state = WorkflowState.load(session_id)
                 
                 _sessions[session_id] = {
                     "session_id": session_id,
-                    "created_at": saved_state.get("created_at", datetime.now().isoformat()),
-                    "workflow_state": saved_state,
+                    "created_at": workflow_state.history[0].get("timestamp", datetime.now().isoformat()) if workflow_state.history else datetime.now().isoformat(),
+                    "workflow_state": workflow_state,
                     "confirmation_manager": None,  # 需要重新创建
                     "agents": {},  # 需要重新创建
-                    "context": saved_state.get("context", {})
+                    "context": workflow_state.context
                 }
-                print(f"[API] Session 恢复成功，当前阶段: {saved_state.get('current_stage', 'unknown')}")
+                print(f"[API] Session 恢复成功，当前阶段: {workflow_state.current_stage}")
             except Exception as e:
                 print(f"[API] Session 恢复失败: {e}，创建新 session")
                 _sessions[session_id] = {
