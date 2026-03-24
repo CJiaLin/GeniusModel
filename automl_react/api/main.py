@@ -467,6 +467,32 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     
     elif stage == "feature_engineering":
         agent = session["agents"].get("feature")
+        if not agent:
+            # Session 恢复后需要重新创建 agent
+            print(f"[API] 重新创建特征工程 Agent...")
+            llm = create_llm_client(model)
+            asset_manager = get_asset_manager(session_id=session_id)
+            
+            # 获取清洗后的数据路径
+            cleaned_data_path = data_path
+            cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
+            if cleaning_result_json:
+                try:
+                    cleaning_data = json.loads(cleaning_result_json)
+                    cleaned_data_path = cleaning_data.get("cleaned_data_path", data_path)
+                except:
+                    pass
+            
+            agent = FeatureEngineeringAgent(
+                llm=llm,
+                asset_manager=asset_manager,
+                data_path=cleaned_data_path,
+                target_column=target_column,
+                task_type=task_type
+            )
+            session["agents"]["feature"] = agent
+            print(f"[API] 特征工程 Agent 已重新创建")
+        
         if agent:
             try:
                 print(f"[API] ========== 特征工程阶段开始 ==========")
