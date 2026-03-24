@@ -470,6 +470,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
         if not agent:
             # Session 恢复后需要重新创建 agent
             print(f"[API] 重新创建特征工程 Agent...")
+            model = workflow_state.get_context("model", "kimi-k2.5")
             llm = create_llm_client(model)
             asset_manager = get_asset_manager(session_id=session_id)
             
