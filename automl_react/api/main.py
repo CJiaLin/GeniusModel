@@ -324,11 +324,13 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     if not workflow_state:
         raise HTTPException(status_code=404, detail="会话不存在")
     
-    # 更新工作流状态
-    try:
-        workflow_state.transition_to(WorkflowStage(stage))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"无效的阶段转换: {e}")
+    # 更新工作流状态（如果当前阶段不是目标阶段）
+    target_stage = WorkflowStage(stage)
+    if workflow_state.current_stage != target_stage:
+        try:
+            workflow_state.transition_to(target_stage)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"无效的阶段转换: {e}")
     
     # 获取上下文
     data_path = workflow_state.get_context("data_path")
