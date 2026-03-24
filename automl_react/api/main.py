@@ -337,10 +337,13 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     target_column = workflow_state.get_context("target_column")
     task_type = workflow_state.get_context("task_type")
     
-    # 获取确认管理器
+    # 获取或创建确认管理器
     confirmation_manager = session.get("confirmation_manager")
     if not confirmation_manager:
-        raise HTTPException(status_code=500, detail="确认管理器未初始化")
+        # Session 恢复后需要重新创建确认管理器
+        confirmation_manager = ConfirmationManager()
+        session["confirmation_manager"] = confirmation_manager
+        print(f"[API] 已重新创建确认管理器")
     
     # 根据阶段执行相应操作
     if stage == "data_exploration":
