@@ -709,22 +709,12 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
         raise
     
     # 检查清洗后的数据文件
-    temp_cleaned_path = data_path.replace('.csv', '_cleaned.csv')
+    final_cleaned_path = agent.cleaned_data_path
     import os
-    file_exists = os.path.exists(temp_cleaned_path)
+    file_exists = os.path.exists(final_cleaned_path)
     
-    # 将清洗后的数据复制到 session 目录
-    final_cleaned_path = None
-    if file_exists:
-        session_cleaned_path = asset_manager.session_dir / "data" / "cleaned_data.csv"
-        session_cleaned_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(temp_cleaned_path, session_cleaned_path)
-        final_cleaned_path = str(session_cleaned_path)
-        print(f"[API] 清洗后数据已复制到 session 目录: {final_cleaned_path}")
-        # 删除临时文件
-        os.remove(temp_cleaned_path)
-    else:
-        print(f"[API] 警告: 清洗后的数据文件不存在: {temp_cleaned_path}")
+    if not file_exists:
+        print(f"[API] 警告: 清洗后的数据文件不存在: {final_cleaned_path}")
     
     # 构建执行结果
     execution_result = {
@@ -787,28 +777,17 @@ async def execute_feature_engineering(
         traceback.print_exc()
         raise
     
-    # 检查特征工程后的数据文件
-    temp_features_path = data_path.replace('.csv', '_features.csv')
+    # 检查特征工程后的数据文件（使用 agent 中定义的路径）
+    features_data_path = agent.features_data_path if hasattr(agent, 'features_data_path') else None
     import os
-    file_exists = os.path.exists(temp_features_path)
-    
-    # 将特征工程后的数据复制到 session 目录
-    final_features_path = None
-    if file_exists:
-        session_features_path = asset_manager.session_dir / "data" / "features_data.csv"
-        session_features_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(temp_features_path, session_features_path)
-        final_features_path = str(session_features_path)
-        print(f"[API] 特征工程后数据已复制到 session 目录: {final_features_path}")
-        # 删除临时文件
-        os.remove(temp_features_path)
-    else:
-        print(f"[API] 警告: 特征工程后的数据文件不存在: {temp_features_path}")
-    
+    file_exists = features_data_path and os.path.exists(features_data_path)
+    if not file_exists:
+        print(f"[API] 警告: 特征工程后的数据文件不存在: {features_data_path}")
+
     # 构建执行结果
     execution_result = {
         "success": file_exists,
-        "features_data_path": final_features_path,
+        "features_data_path": features_data_path if file_exists else None,
         "original_path": data_path,
         "timestamp": datetime.now().isoformat(),
         "stage": "feature_engineering"

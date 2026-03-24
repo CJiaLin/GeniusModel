@@ -341,7 +341,7 @@ class FeatureEngineeringAgent(ReActAgent):
 
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
-        features_data_path = str(self.asset_manager.session_dir / "data" / "features_data.csv")
+        self.features_data_path = str(self.asset_manager.session_dir / "data" / "features_data.csv")
 
         task_prompt = f"""基于以下特征工程方案，生成完整的 Python 代码：
 
@@ -358,7 +358,7 @@ class FeatureEngineeringAgent(ReActAgent):
 要求：
 1. 使用 pandas 和 scikit-learn 进行特征工程
 2. 包含详细的注释
-3. 保存特征工程后的数据到: {features_data_path}
+3. 保存特征工程后的数据到: {self.features_data_path}
 4. 返回新生成的特征列表
 5. 代码必须完整可执行，包含所有必要的导入语句
 6. 必须使用上述实际数据的列名
@@ -373,7 +373,7 @@ class FeatureEngineeringAgent(ReActAgent):
             "data_path": self.data_path,
             "target_column": self.target_column,
             "task_type": self.task_type,
-            "feature_data_path": features_data_path
+            "feature_data_path": self.features_data_path
         }
 
         # 生成代码并执行验证
