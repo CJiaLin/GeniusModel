@@ -450,18 +450,19 @@ model_training:
     6. 将包含目标列的测试集保存到: {test_split_path}
     7. 保存训练好的模型到: {model_path}
     8. 保存训练摘要 JSON 到: {training_summary_path}
-    9. 训练摘要至少包含 metrics、selected_feature_names、target_column、task_type、model_path、train_split_path、test_split_path
+    9. 训练摘要至少包含 metrics、selected_feature_names、target_column、task_type、target_transform、model_path、train_split_path、test_split_path
     10. 代码中必须定义以下变量，供系统回收执行结果：metrics、selected_feature_names、model_path、train_split_path、test_split_path、training_summary_path
     11. 包含详细的注释
     12. 代码必须完整可执行，包含所有必要的导入语句
     13. 必须使用上述实际数据的列名
-    14. 将训练摘要写入 JSON 文件，且其中必须包含 metrics、selected_feature_names、target_column、task_type、model_path、train_split_path、test_split_path
+    14. 将训练摘要写入 JSON 文件，且其中必须包含 metrics、selected_feature_names、target_column、task_type、target_transform、model_path、train_split_path、test_split_path
     15. 代码必须先读取 {data_path}，再基于实际列名动态构建训练输入；不要手工硬编码一个狭窄的特征白名单，除非这些排除项已经在建模方案中被明确批准
     16. 如果数据中仍然包含分类特征，必须采用稳健、可执行的处理方式（如 ColumnTransformer + OneHotEncoder、CatBoost 原生类别处理、或其它可复现方案），不能假设所有特征都已经是纯数值
     17. 如果决定对目标变量做变换（如 log1p），必须在代码中显式写出训练时的变换逻辑和预测后的逆变换逻辑，并保证 train/test split 保存的是原始业务尺度下的目标列
     18. 如果进行多模型对比，必须基于与任务类型一致的主验证指标选择最佳模型，且最终保存的模型必须与 training_summary 中记录的最佳模型一致
     19. selected_feature_names 必须反映最终实际送入模型训练的特征名，而不是计划里臆造的一组字段
     20. 如果代码检测到方案中声明要排除的特征在当前数据中不存在，应安全跳过，不得报错；如果目标列不存在，则必须明确抛错
+    21. 保存到 {model_path} 的模型文件必须是统一打包结构，而不是裸模型对象。至少包含以下键：model、selected_feature_names、target_transform、preprocessor；如果没有独立预处理器，preprocessor 也必须显式写为 None
 
     **额外硬约束**：
     1. 除非建模方案明确写出要排除的字段，否则不要做人工特征筛选。
@@ -469,8 +470,61 @@ model_training:
     3. 不要把方案阶段的“模型推荐理由”误实现成“仅保留少数字段训练”。
     4. 生成的代码必须与 plan 中的特征使用原则、目标变量处理策略、评估指标口径保持一致。
     5. 输出代码前，先在代码逻辑中保证路径目录存在，且所有导出的 JSON 内容可序列化。
+    6. 即使最终模型是 sklearn Pipeline、XGBoost、LightGBM 或其他对象，也不要直接裸保存；必须包装为 dict 后再保存到 {model_path}。
 
     请生成完整的、可执行的 Python 代码。
+
+    技术参考：
+    {skill_content}
+
+# 模型评估 Agent 的 Prompts
+model_evaluation:
+  system_prompt: |
+    你是一位专业的机器学习模型评估专家。
+
+    你的职责：
+    1. 基于已保存的模型和测试集制定评估方案
+    2. 核验训练阶段指标是否能够在当前产物上复现
+    3. 给出规范的评估指标口径和结果解释
+    4. 明确评估产物的用途与限制
+
+    工作原则：
+    - 必须基于当前会话中真实存在的模型文件和测试集文件进行评估
+    - 不得臆造评估结果、图表结论或额外数据来源
+    - 如果训练摘要中的指标与当前评估口径不一致，必须在方案中明确说明核验重点
+    - 优先保证评估结果可复现、可审计、可回溯
+
+  analysis_prompt: |
+    请分析模型评估阶段的输入条件：
+
+    - 目标列: {target_column}
+    - 任务类型: {task_type}
+
+    请至少覆盖：
+    1. 当前是否具备执行评估的前置条件
+    2. 评估所依赖的核心产物类型（模型文件、测试集、训练摘要）
+    3. 适合当前任务类型的主要评估指标
+    4. 训练阶段指标复核时需要注意的一致性问题
+
+  plan_generation: |
+    你是一位机器学习评估专家。
+
+    {task_context}{current_evaluation_context}
+
+    **关键要求**：
+    1. 输出必须是“模型评估方案”，不是执行代码。
+    2. 方案必须围绕当前会话里已经保存的模型文件、测试集文件、训练摘要展开。
+    3. 必须明确评估会复核哪些指标，以及这些指标与训练阶段摘要中的对应关系。
+    4. 如果训练阶段存在目标变换（如 log1p），必须明确说明评估指标应以原始业务尺度还是变换后尺度为准。
+    5. 必须说明评估完成后会生成的产物，以及这些产物用于什么目的。
+
+    请生成 Markdown 格式的模型评估方案，至少包含：
+    1. 已核实评估事实
+    2. 评估目标与范围
+    3. 评估指标与口径
+    4. 评估执行步骤
+    5. 风险与一致性检查点
+    6. 评估产物说明
 
     技术参考：
     {skill_content}

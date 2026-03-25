@@ -15,6 +15,8 @@ import sys
 import threading
 import subprocess
 
+import joblib
+
 # API 基础地址
 BASE_URL = "http://localhost:8000"
 
@@ -131,7 +133,7 @@ def test_start_workflow():
         "target_column": "SalePrice",
         "task_type": "regression",
         "model": "kimi-k2.5",
-        "task_description": "我希望建立一个房价预测模型，用于预测二手房的销售价格。请重点关注房屋面积、地段、建造年份等关键特征，并尝试多种回归算法进行对比。"
+        "task_description": "我希望建立一个房价预测模型，用于预测二手房的销售价格。请重点关注房屋面积、地段、建造年份等关键特征，并尝试多种回归算法进行对比。采用对数化后的 SalePrice 计算评估指标。"
     }
     
     response = post_with_progress(url, json_body=data, timeout=120, label="启动工作流")
@@ -357,9 +359,63 @@ def test_model_training_stage():
     return True
 
 
+def test_model_evaluation_stage():
+    """步骤 6: 模型评估阶段 - 生成方案并确认执行"""
+    print_step(6, "模型评估阶段")
+
+    url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/model_evaluation/run"
+    response = post_with_progress(url, json_body={}, timeout=300, label="执行模型评估")
+
+    if response.status_code != 200:
+        print(f"❌ 模型评估失败: {response.status_code} - {response.text}")
+        return False
+
+    result = response.json()
+    if not result.get("success"):
+        print(f"❌ 模型评估方案生成失败: {result}")
+        return False
+
+    print("✅ 模型评估方案生成成功")
+    print(f"   - 方案长度: {len(result.get('proposal', ''))} 字符")
+
+    if not result.get("requires_confirmation"):
+        print("   ❌ 模型评估阶段未返回 requires_confirmation，流程异常")
+        return False
+
+    exec_result = test_submit_confirmation_and_execute(
+        result.get("confirmation_id"),
+        "confirmed"
+    )
+    if not exec_result:
+        print("   ❌ 模型评估确认执行失败")
+        return False
+
+    evaluation = exec_result.get("execution", {})
+    if not evaluation.get("success"):
+        print(f"❌ 模型评估执行失败: {evaluation.get('error', evaluation)}")
+        return False
+
+    metrics = evaluation.get("metrics", {})
+    print("✅ 模型评估执行完成")
+    print(f"   - 评估数据: {evaluation.get('data_path')}")
+    print(f"   - 评估指标: {metrics}")
+
+    if not metrics:
+        print("   ❌ 未返回评估指标")
+        return False
+
+    required_metrics = {"rmse", "mae", "r2", "rmsle", "mape"}
+    missing = [name for name in required_metrics if name not in metrics]
+    if missing:
+        print(f"   ❌ 缺少关键评估指标: {missing}")
+        return False
+
+    return True
+
+
 def test_list_assets():
-    """步骤 6: 列出所有资产"""
-    print_step(6, "列出所有生成的资产")
+    """步骤 7: 列出所有资产"""
+    print_step(7, "列出所有生成的资产")
     
     url = f"{BASE_URL}/assets/{SESSION_ID}/list"
     
@@ -398,12 +454,40 @@ def test_list_assets():
             "model_training_plan.md",
             "model_training_result.json",
             "trained_model.pkl",
+            "training_summary.json",
         }
         missing = [x for x in required_models if x not in models_files]
         if missing:
             print(f"❌ 缺少关键模型训练产物: {missing}")
             return False
         print("✅ 模型训练产物校验通过")
+
+        model_artifact_path = f"/Users/cjialin/code/AutoMLByLLM/assets/{SESSION_ID}/models/trained_model.pkl"
+        try:
+            model_artifact = joblib.load(model_artifact_path)
+        except Exception as error:
+            print(f"❌ 模型产物读取失败: {error}")
+            return False
+
+        if not isinstance(model_artifact, dict):
+            print(f"❌ 模型产物不是标准打包结构: {type(model_artifact)}")
+            return False
+
+        required_artifact_keys = {"model", "selected_feature_names", "target_transform", "preprocessor"}
+        missing_artifact_keys = [key for key in required_artifact_keys if key not in model_artifact]
+        if missing_artifact_keys:
+            print(f"❌ 模型产物缺少关键字段: {missing_artifact_keys}")
+            return False
+
+        print("✅ 模型包结构校验通过")
+
+        reports_files = [f.get('name') for f in assets.get('reports', [])]
+        required_reports = {"evaluation.json"}
+        missing = [x for x in required_reports if x not in reports_files]
+        if missing:
+            print(f"❌ 缺少关键模型评估产物: {missing}")
+            return False
+        print("✅ 模型评估产物校验通过")
         return True
     else:
         print(f"❌ 资产列表获取失败: {response.status_code} - {response.text}")
@@ -443,7 +527,10 @@ def main():
     # 步骤 5: 模型训练 (生成方案 + 执行)
     results.append(("模型训练", test_model_training_stage()))
 
-    # 步骤 6: 列出资产
+    # 步骤 6: 模型评估
+    results.append(("模型评估", test_model_evaluation_stage()))
+
+    # 步骤 7: 列出资产
     results.append(("列出资产", test_list_assets()))
     
     # 打印测试总结

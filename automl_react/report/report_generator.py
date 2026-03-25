@@ -66,7 +66,9 @@ class ReportGenerator:
         # 读取各阶段结果
         cleaning_result = self._load_cleaning_result()
         feature_result = self._load_feature_result()
+        feature_evaluation_result = self._load_feature_evaluation_result()
         model_result = self._load_model_result()
+        training_summary = self._load_training_summary()
         evaluation_result = self._load_evaluation_result()
 
         # 生成报告
@@ -76,7 +78,9 @@ class ReportGenerator:
             task_type=task_type,
             cleaning_result=cleaning_result,
             feature_result=feature_result,
+            feature_evaluation_result=feature_evaluation_result,
             model_result=model_result,
+            training_summary=training_summary,
             evaluation_result=evaluation_result,
             chart_guide=chart_guide
         )
@@ -117,6 +121,20 @@ class ReportGenerator:
             return json.loads(data)
         return {}
 
+    def _load_training_summary(self) -> Dict[str, Any]:
+        """加载训练摘要。"""
+        data = self.asset_manager.read_asset("models", "training_summary.json")
+        if data:
+            return json.loads(data)
+        return {}
+
+    def _load_feature_evaluation_result(self) -> Dict[str, Any]:
+        """加载特征评估结果。"""
+        data = self.asset_manager.read_asset("features", "feature_evaluation_result.json")
+        if data:
+            return json.loads(data)
+        return {}
+
     def _load_evaluation_result(self) -> Dict[str, Any]:
         """加载评估结果"""
         data = self.asset_manager.read_asset("reports", "evaluation.json")
@@ -131,7 +149,9 @@ class ReportGenerator:
         task_type: str,
         cleaning_result: Dict,
         feature_result: Dict,
+        feature_evaluation_result: Dict,
         model_result: Dict,
+        training_summary: Dict,
         evaluation_result: Dict,
         chart_guide: str
     ) -> str:
@@ -203,11 +223,19 @@ class ReportGenerator:
             new_features = feature_result.get('new_features', [])
             report_lines.extend([
                 "✅ **特征工程状态**: 成功",
+                f"- **特征数据路径**: {feature_result.get('features_data_path', 'N/A')}",
                 f"- **原始特征数**: {feature_result.get('original_features', 'N/A')}",
                 f"- **新生成特征数**: {len(new_features)}",
                 f"- **总特征数**: {feature_result.get('total_features', 'N/A')}",
                 ""
             ])
+
+            if feature_evaluation_result.get("success"):
+                report_lines.extend([
+                    "- **特征评估状态**: 已完成",
+                    f"- **特征评估报告**: {feature_evaluation_result.get('metrics_report_path', 'N/A')}",
+                    ""
+                ])
 
             if new_features:
                 report_lines.extend([
@@ -232,12 +260,36 @@ class ReportGenerator:
         ])
 
         if model_result.get("success"):
+            model_metrics = model_result.get('metrics', {})
             report_lines.extend([
                 "✅ **训练状态**: 成功",
                 f"- **任务类型**: {model_result.get('task_type', 'N/A')}",
                 f"- **模型路径**: `{model_result.get('model_path', 'N/A')}`",
+                f"- **训练摘要**: `{model_result.get('training_summary_path', 'N/A')}`",
+                f"- **测试集切分**: `{model_result.get('test_split_path', 'N/A')}`",
                 ""
             ])
+
+            if training_summary:
+                report_lines.extend([
+                    f"- **最佳模型**: {training_summary.get('best_model', 'N/A')}",
+                    f"- **目标变换**: {training_summary.get('target_transform', 'N/A')}",
+                    f"- **入模特征数**: {len(training_summary.get('selected_feature_names', []))}",
+                    f"- **排除特征**: {', '.join(training_summary.get('excluded_features', [])) or '无'}",
+                    ""
+                ])
+
+            if model_metrics:
+                report_lines.extend([
+                    "### 训练阶段回收指标",
+                    "",
+                    "| 指标 | 数值 |",
+                    "|------|------|"
+                ])
+                for metric_name, metric_value in model_metrics.items():
+                    value = f"{metric_value:.4f}" if isinstance(metric_value, float) else str(metric_value)
+                    report_lines.append(f"| {metric_name} | {value} |")
+                report_lines.append("")
         else:
             report_lines.extend([
                 "❌ **训练状态**: 失败",
@@ -255,6 +307,8 @@ class ReportGenerator:
             metrics = evaluation_result.get('metrics', {})
             report_lines.extend([
                 "✅ **评估状态**: 成功",
+                f"- **评估数据路径**: `{evaluation_result.get('data_path', 'N/A')}`",
+                f"- **评估模型路径**: `{evaluation_result.get('model_path', 'N/A')}`",
                 "",
                 "### 评估指标",
                 "",
@@ -388,8 +442,12 @@ class ReportGenerator:
                 ])
             else:
                 r2 = metrics.get('r2', 0)
+                rmse = metrics.get('rmse')
+                rmsle = metrics.get('rmsle')
                 report_lines.extend([
                     f"- **R² 分数**: {r2:.4f}",
+                    f"- **RMSE**: {rmse:.4f}" if isinstance(rmse, (int, float)) else "- **RMSE**: N/A",
+                    f"- **RMSLE**: {rmsle:.4f}" if isinstance(rmsle, (int, float)) else "- **RMSLE**: N/A",
                     ""
                 ])
 

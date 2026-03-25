@@ -6,8 +6,11 @@
 
 import json
 import os
+import pickle
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
+
+import joblib
 
 from ..core.react_agent import ReActAgent, ConfirmationRequired
 from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
@@ -73,6 +76,72 @@ class ModelTrainingAgent(ReActAgent):
         except Exception:
             return {}
 
+    @staticmethod
+    def _normalize_target_transform(raw_transform: Any) -> Optional[str]:
+        """规范化目标变换字段。"""
+        if not raw_transform or not isinstance(raw_transform, str):
+            return None
+
+        lowered = raw_transform.lower()
+        if "log1p" in lowered:
+            return "log1p"
+        return None
+
+    def _load_model_artifact(self, model_path: str) -> Any:
+        """读取模型产物。"""
+        try:
+            return joblib.load(model_path)
+        except Exception:
+            with open(model_path, "rb") as file:
+                return pickle.load(file)
+
+    def _save_model_artifact(self, artifact: Any, model_path: str) -> None:
+        """统一保存模型产物。"""
+        joblib.dump(artifact, model_path)
+
+    def _build_packaged_model_artifact(
+        self,
+        raw_model_artifact: Any,
+        summary_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """将模型产物标准化为统一打包结构。"""
+        if isinstance(raw_model_artifact, dict) and "model" in raw_model_artifact:
+            packaged = dict(raw_model_artifact)
+        else:
+            packaged = {
+                "model": raw_model_artifact,
+                "preprocessor": None,
+            }
+
+        selected_feature_names = summary_payload.get("selected_feature_names")
+        if not isinstance(selected_feature_names, list):
+            selected_feature_names = []
+
+        packaged["selected_feature_names"] = selected_feature_names
+        packaged["target_transform"] = self._normalize_target_transform(
+            summary_payload.get("target_transform")
+        )
+        packaged.setdefault("preprocessor", None)
+        packaged["target_column"] = summary_payload.get("target_column", self.target_column)
+        packaged["task_type"] = summary_payload.get("task_type", self.task_type)
+        packaged["artifact_format"] = "model_package_v1"
+        return packaged
+
+    def _normalize_training_artifacts(self) -> Dict[str, Any]:
+        """将训练产物收敛为统一模型包格式。"""
+        artifact_paths = self._get_training_artifact_paths()
+        model_path = artifact_paths["model_path"]
+        summary_path = artifact_paths["training_summary_path"]
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"模型文件不存在: {model_path}")
+
+        summary_payload = self._read_training_summary(summary_path)
+        raw_artifact = self._load_model_artifact(model_path)
+        packaged_artifact = self._build_packaged_model_artifact(raw_artifact, summary_payload)
+        self._save_model_artifact(packaged_artifact, model_path)
+        return packaged_artifact
+
     def _collect_training_result(self, execution_output: str = "", execution_error: Optional[str] = None) -> Dict[str, Any]:
         """基于已生成资产收集统一的模型训练结果。"""
         artifact_paths = self._get_training_artifact_paths()
@@ -90,6 +159,7 @@ class ModelTrainingAgent(ReActAgent):
             "task_type": self.task_type,
             "metrics": summary_payload.get("metrics", {}),
             "selected_feature_names": summary_payload.get("selected_feature_names", []),
+            "target_transform": self._normalize_target_transform(summary_payload.get("target_transform")),
             "artifact_status": artifact_status,
             "execution_output": execution_output,
             "execution_error": execution_error,
@@ -125,6 +195,7 @@ class ModelTrainingAgent(ReActAgent):
             "selected_feature_names",
             "target_column",
             "task_type",
+            "target_transform",
             "model_path",
             "train_split_path",
             "test_split_path"
@@ -133,11 +204,22 @@ class ModelTrainingAgent(ReActAgent):
         if missing_summary_keys:
             return False, f"训练摘要缺少字段: {missing_summary_keys}"
 
+        try:
+            model_artifact = self._load_model_artifact(artifact_paths["model_path"])
+        except Exception as error:
+            return False, f"模型文件不可读: {error}"
+
+        if not isinstance(model_artifact, dict) or "model" not in model_artifact:
+            return False, "模型文件不是标准打包结构，缺少 model 字段"
+
+        for required_key in ["selected_feature_names", "target_transform", "preprocessor"]:
+            if required_key not in model_artifact:
+                return False, f"模型文件缺少字段: {required_key}"
+
         return True, f"train={train_df.shape}, test={test_df.shape}, target={target_column}"
 
     def _deterministic_model_training_fallback(self, context: Dict[str, Any], output_path: str) -> Tuple[bool, str]:
         """确定性兜底：使用简单 sklearn 基线模型完成训练并落盘。"""
-        import joblib
         import pandas as pd
         from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
         from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
@@ -195,13 +277,23 @@ class ModelTrainingAgent(ReActAgent):
 
         train_df.to_csv(artifact_paths["train_split_path"], index=False)
         test_df.to_csv(artifact_paths["test_split_path"], index=False)
-        joblib.dump(model, artifact_paths["model_path"])
+        packaged_artifact = {
+            "model": model,
+            "selected_feature_names": selected_feature_names,
+            "target_transform": None,
+            "preprocessor": None,
+            "target_column": target_column,
+            "task_type": self.task_type,
+            "artifact_format": "model_package_v1"
+        }
+        self._save_model_artifact(packaged_artifact, artifact_paths["model_path"])
 
         summary_payload = {
             "metrics": metrics,
             "selected_feature_names": selected_feature_names,
             "target_column": target_column,
             "task_type": self.task_type,
+            "target_transform": None,
             "data_path": data_path,
             "model_path": artifact_paths["model_path"],
             "train_split_path": artifact_paths["train_split_path"],
@@ -559,6 +651,8 @@ class ModelTrainingAgent(ReActAgent):
         if not result.success:
             raise ValueError(f"代码生成失败: {result.error}")
 
+        self._normalize_training_artifacts()
+
         self.model_code = result.code
         self.model_result = self._collect_training_result(execution_output=result.output)
 
@@ -621,6 +715,8 @@ class ModelTrainingAgent(ReActAgent):
 
         codeact = CodeActAgent(llm=self.llm, max_iterations=1, timeout=300, session_id=self.session_id)
         exec_result = codeact._execute_code(model_code, context)
+        if exec_result.get("success"):
+            self._normalize_training_artifacts()
         result_info = self._collect_training_result(
             execution_output=exec_result.get("output", ""),
             execution_error=exec_result.get("error") if not exec_result.get("success") else None,

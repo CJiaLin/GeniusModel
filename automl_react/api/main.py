@@ -24,10 +24,10 @@ from datetime import datetime
 from automl_react.agents import (
     DataCleaningAgent,
     FeatureEngineeringAgent,
+    ModelEvaluationAgent,
     ModelTrainingAgent
 )
 from automl_react.agents.data_analysis_agent import DataAnalysisAgent
-from automl_react.evaluation import ModelEvaluator
 from automl_react.report import PipelineGenerator, ReportGenerator
 from automl_react.workflow import WorkflowState, WorkflowStage
 from automl_react.confirmation import ConfirmationManager, ConfirmationStatus
@@ -81,6 +81,52 @@ class ChatRequest(BaseModel):
 
 
 # 辅助函数
+def _get_session_original_data_path(session_id: str) -> Path:
+    """获取会话内统一的原始数据资产路径。"""
+    asset_manager = get_asset_manager(session_id=session_id)
+    return asset_manager.session_dir / "data" / "original_data.csv"
+
+
+def _ensure_session_data_path(session_id: str, source_data_path: Optional[str]) -> Optional[str]:
+    """确保源数据已落入会话资产目录，并返回统一后的资产路径。"""
+    if not source_data_path:
+        return None
+
+    session_data_path = _get_session_original_data_path(session_id)
+    session_data_path.parent.mkdir(parents=True, exist_ok=True)
+
+    source_path = Path(source_data_path)
+    if source_path.exists():
+        try:
+            if source_path.resolve() != session_data_path.resolve():
+                import shutil
+                shutil.copy2(source_path, session_data_path)
+                print(f"[API] 初始数据已复制到: {session_data_path}")
+        except FileNotFoundError:
+            import shutil
+            shutil.copy2(source_path, session_data_path)
+            print(f"[API] 初始数据已复制到: {session_data_path}")
+
+    if session_data_path.exists():
+        return str(session_data_path)
+
+    return source_data_path
+
+
+def _normalize_workflow_data_path(session_id: str, workflow_state: Optional[WorkflowState]) -> None:
+    """将工作流中的源数据路径统一纠偏到会话资产目录。"""
+    if not workflow_state:
+        return
+
+    current_data_path = workflow_state.get_context("data_path")
+    normalized_data_path = _ensure_session_data_path(session_id, current_data_path)
+
+    if normalized_data_path and normalized_data_path != current_data_path:
+        workflow_state.set_context("data_path", normalized_data_path)
+        workflow_state.save()
+        print(f"[API] 已统一 data_path 到资产路径: {normalized_data_path}")
+
+
 def get_session(session_id: str) -> Dict[str, Any]:
     """获取会话状态（支持从文件恢复）"""
     if session_id not in _sessions:
@@ -93,6 +139,7 @@ def get_session(session_id: str) -> Dict[str, Any]:
             try:
                 # 使用 WorkflowState.load 方法加载状态
                 workflow_state = WorkflowState.load(session_id)
+                _normalize_workflow_data_path(session_id, workflow_state)
                 
                 _sessions[session_id] = {
                     "session_id": session_id,
@@ -223,16 +270,15 @@ async def start_workflow(request: StartWorkflowRequest):
     
     初始化工作流状态和相关组件
     """
-    import shutil
-    
     session = get_session(request.session_id)
+    normalized_data_path = _ensure_session_data_path(request.session_id, request.data_path)
     
     # 创建工作流状态
     workflow_state = WorkflowState(
         session_id=request.session_id,
         initial_stage=WorkflowStage.DATA_UPLOAD
     )
-    workflow_state.set_context("data_path", request.data_path)
+    workflow_state.set_context("data_path", normalized_data_path)
     workflow_state.set_context("target_column", request.target_column)
     workflow_state.set_context("task_type", request.task_type)
     workflow_state.set_context("model", request.model)
@@ -240,15 +286,6 @@ async def start_workflow(request: StartWorkflowRequest):
     
     session["workflow_state"] = workflow_state
     session["confirmation_manager"] = ConfirmationManager()
-    
-    # 将初始数据复制到 session 目录
-    asset_manager = get_asset_manager(session_id=request.session_id)
-    original_data_path = Path(request.data_path)
-    if original_data_path.exists():
-        session_data_path = asset_manager.session_dir / "data" / "original_data.csv"
-        session_data_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(original_data_path, session_data_path)
-        print(f"[API] 初始数据已复制到: {session_data_path}")
     
     # 创建 LLM 客户端
     try:
@@ -282,6 +319,10 @@ async def start_workflow(request: StartWorkflowRequest):
         llm=llm,
         session_id=request.session_id
     )
+    session["agents"]["evaluation"] = ModelEvaluationAgent(
+        llm=llm,
+        session_id=request.session_id
+    )
     
     # 保存状态
     workflow_state.save()
@@ -290,6 +331,7 @@ async def start_workflow(request: StartWorkflowRequest):
         "success": True,
         "session_id": request.session_id,
         "current_stage": workflow_state.current_stage.value,
+        "data_path": normalized_data_path,
         "message": "工作流已启动"
     }
 
@@ -359,7 +401,6 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
             
             # 读取清洗后的数据路径
             asset_manager = get_asset_manager(session_id=session_id)
-            import json
             cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
             cleaned_data_path = None
             if cleaning_result_json:
@@ -504,7 +545,6 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 # 读取探索性分析报告（新流程：exploration 目录）
                 exploration_result = asset_manager.read_asset("exploration", "data_exploration_result.md")
                 # 读取清洗后的数据路径
-                import json
                 cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
                 cleaned_data_path = None
                 if cleaning_result_json:
@@ -575,7 +615,6 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 feature_metrics_report = asset_manager.read_asset("features", "feature_metrics_report.md")
                 
                 # 读取特征工程后的数据路径
-                import json
                 feature_result_json = asset_manager.read_asset("features", "feature_engineering_result.json")
                 features_data_path = None
                 if feature_result_json:
@@ -630,6 +669,55 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
+
+    elif stage == "model_evaluation":
+        agent = session["agents"].get("evaluation")
+        if not agent:
+            model = workflow_state.get_context("model", "kimi-k2.5")
+            llm = create_llm_client(model)
+            agent = ModelEvaluationAgent(llm=llm, session_id=session_id)
+            session["agents"]["evaluation"] = agent
+
+        try:
+            print(f"[API] ========== 模型评估阶段开始 ==========")
+
+            asset_manager = get_asset_manager(session_id=session_id)
+            model_result_json = asset_manager.read_asset("models", "model_training_result.json")
+            model_result = json.loads(model_result_json) if model_result_json else None
+
+            task_description = workflow_state.get_context("task_description", "")
+            result = agent.generate_evaluation_plan(
+                target_column=target_column,
+                task_type=task_type,
+                model_result=model_result,
+                task_description=task_description,
+            )
+
+            asset_manager.save_data(
+                data=result,
+                filename="evaluation_plan.md",
+                asset_type="reports",
+                metadata={
+                    "stage": "model_evaluation",
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+
+            confirmation_point = confirmation_manager.add_confirmation_point(
+                stage="model_evaluation",
+                proposal_content=result
+            )
+
+            print(f"[API] ========== 模型评估阶段完成 ==========")
+            return {
+                "success": True,
+                "stage": stage,
+                "proposal": result,
+                "requires_confirmation": True,
+                "confirmation_id": confirmation_point.id,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
     
     return {"success": False, "error": "未知的阶段"}
 
@@ -725,6 +813,15 @@ async def submit_confirmation(request: UserConfirmationRequest):
                 execution_result = await execute_feature_evaluation(
                     session, request.modifications
                 )
+            elif stage == "model_evaluation":
+                execution_result = await execute_model_evaluation(
+                    session, target_column, task_type
+                )
+                if execution_result.get("success"):
+                    workflow_state.transition_to(
+                        WorkflowStage.COMPLETED,
+                        message="Model evaluation completed"
+                    )
         except Exception as e:
             return JSONResponse(
                 status_code=500,
@@ -735,6 +832,12 @@ async def submit_confirmation(request: UserConfirmationRequest):
                 }
             )
     
+    if stage == "model_evaluation" and status == ConfirmationStatus.SKIPPED:
+        workflow_state.transition_to(
+            WorkflowStage.COMPLETED,
+            message="Model evaluation skipped"
+        )
+
     # 提交响应
     try:
         confirmation_manager.submit_response(
@@ -1003,6 +1106,23 @@ async def execute_model_training(
     return execution_result
 
 
+async def execute_model_evaluation(
+    session: Dict,
+    target_column: str,
+    task_type: str,
+) -> Dict:
+    """执行模型评估。"""
+    agent = session["agents"].get("evaluation")
+    if not agent:
+        agent = ModelEvaluationAgent(session_id=session.get("session_id", "default"))
+        session["agents"]["evaluation"] = agent
+
+    return agent.evaluate_from_training_result(
+        target_column=target_column,
+        task_type=task_type,
+    )
+
+
 @app.get("/confirmation/{session_id}/pending")
 async def get_pending_confirmation(session_id: str):
     """获取待处理的确认点"""
@@ -1012,7 +1132,11 @@ async def get_pending_confirmation(session_id: str):
     if not confirmation_manager:
         raise HTTPException(status_code=404, detail="确认管理器不存在")
     
-    current = confirmation_manager.get_current_confirmation()
+    current = confirmation_manager.current
+
+    if not current:
+        pending_points = confirmation_manager.get_pending_points()
+        current = pending_points[0] if pending_points else None
     
     if not current:
         return {"has_pending": False}
