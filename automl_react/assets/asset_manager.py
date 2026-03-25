@@ -6,6 +6,8 @@
 
 import os
 import shutil
+import re
+import json
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from pathlib import Path
@@ -66,19 +68,89 @@ class AssetManager:
         self._create_directory_structure()
 
     def _create_directory_structure(self):
-        """创建资产目录结构"""
-        directories = [
-            "data",           # 原始数据和处理后的数据
-            "analysis",       # 数据分析结果
-            "cleaning",       # 数据清洗方案和结果
-            "features",       # 特征工程方案和结果
-            "code",           # 生成代码
-            "models",         # 训练好的模型
-            "reports",        # 可视化报告
+        """创建会话根目录，具体资产目录在首次保存时按需创建。"""
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+
+    def _infer_asset_type_from_stage(self, stage: str) -> Optional[str]:
+        """根据阶段名推断资产目录。"""
+        if not stage:
+            return None
+
+        if stage == "data_analysis" or stage.startswith("data_cleaning"):
+            return "cleaning"
+        if stage.startswith("data_exploration") or stage == "feature_suggestions":
+            return "exploration"
+        if stage.startswith("feature_"):
+            return "features"
+        if stage.startswith("model_"):
+            return "models"
+
+        return None
+
+    def save_prompt(
+        self,
+        prompt: str,
+        filename: str,
+        asset_type: str,
+        metadata: Dict[str, Any] = None
+    ) -> AssetInfo:
+        """保存最终发送给 LLM 的完整 prompt。"""
+        prompt_document = self._format_prompt_document(prompt, metadata)
+        return self.save_data(prompt_document, filename, asset_type, metadata)
+
+    def _format_prompt_document(self, prompt: str, metadata: Dict[str, Any] = None) -> str:
+        """将 prompt 包装为统一的可审阅文档格式。"""
+        metadata = metadata or {}
+
+        header_lines = ["# Prompt Snapshot", ""]
+
+        ordered_fields = [
+            ("stage", "Stage"),
+            ("prompt_scope", "Prompt Scope"),
+            ("prompt_format", "Prompt Format"),
+            ("model_name", "Model"),
+            ("provider", "Provider"),
+            ("call_type", "Call Type"),
+            ("iteration", "Iteration"),
+            ("timestamp", "Timestamp"),
         ]
 
-        for dir_name in directories:
-            (self.session_dir / dir_name).mkdir(parents=True, exist_ok=True)
+        for key, label in ordered_fields:
+            value = metadata.get(key)
+            if value not in (None, ""):
+                header_lines.append(f"- {label}: {value}")
+
+        extra_metadata = {
+            key: value for key, value in metadata.items()
+            if key not in {field for field, _ in ordered_fields}
+        }
+        if extra_metadata:
+            header_lines.extend(["", "## Metadata", "", json.dumps(extra_metadata, ensure_ascii=False, indent=2)])
+
+        header_lines.extend([
+            "",
+            "## Prompt Content",
+            "",
+            prompt.strip(),
+            "",
+        ])
+
+        return "\n".join(header_lines)
+
+    def save_prompt_for_stage(
+        self,
+        prompt: str,
+        stage: str,
+        metadata: Dict[str, Any] = None
+    ) -> Optional[AssetInfo]:
+        """按阶段保存 prompt 到 prompts 资产目录。"""
+        if not stage or not prompt or not prompt.strip():
+            return None
+
+        safe_stage = re.sub(r"[^a-zA-Z0-9_-]+", "_", stage).strip("_") or "llm"
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
+        filename = f"{safe_stage}_prompt_{timestamp}.md"
+        return self.save_prompt(prompt, filename, "prompts", metadata)
 
     def _get_asset_path(self, asset_type: str, filename: str) -> Path:
         """
@@ -401,7 +473,6 @@ class AssetManager:
             asset_dir = self.session_dir / asset_type
             if asset_dir.exists():
                 shutil.rmtree(asset_dir)
-                asset_dir.mkdir(parents=True, exist_ok=True)
         else:
             # 清空整个会话目录
             if self.session_dir.exists():
@@ -430,7 +501,7 @@ class AssetManager:
         """
         urls = {}
 
-        for asset_type in ["data", "analysis", "cleaning", "features", "code", "models", "reports"]:
+        for asset_type in ["data", "analysis", "cleaning", "exploration", "features", "code", "models", "reports"]:
             assets = self.list_assets(asset_type)
             if assets:
                 urls[asset_type] = [

@@ -9,7 +9,6 @@ and timeout handling.
 from .confirmation_point import (
     ConfirmationStatus,
     SkillReference,
-    CodePreview,
     UserResponse,
     UserConfirmationPoint,
     ConfirmationManager,
@@ -21,7 +20,6 @@ from .confirmation_point import (
 __all__ = [
     "ConfirmationStatus",
     "SkillReference",
-    "CodePreview",
     "UserResponse",
     "UserConfirmationPoint",
     "ConfirmationManager",

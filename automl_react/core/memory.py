@@ -99,7 +99,11 @@ class Memory:
         """获取最近的 n 条记忆"""
         return self.entries[-n:] if len(self.entries) > n else self.entries
     
-    def get_short_term_context(self) -> str:
+    def get_short_term_context(
+        self,
+        include_user_messages: bool = True,
+        include_assistant_messages: bool = True,
+    ) -> str:
         """获取短期记忆上下文"""
         if not self.short_term:
             return ""
@@ -107,9 +111,11 @@ class Memory:
         lines = ["## 对话历史"]
         for entry in self.short_term:
             if entry.type == MemoryType.USER_MESSAGE:
-                lines.append(f"用户: {entry.content}")
+                if include_user_messages:
+                    lines.append(f"用户: {entry.content}")
             elif entry.type == MemoryType.ASSISTANT_MESSAGE:
-                lines.append(f"助手: {entry.content}")
+                if include_assistant_messages:
+                    lines.append(f"助手: {entry.content}")
             elif entry.type == MemoryType.THOUGHT:
                 lines.append(f"思考: {entry.content}")
             elif entry.type == MemoryType.ACTION:
@@ -117,6 +123,9 @@ class Memory:
             elif entry.type == MemoryType.OBSERVATION:
                 lines.append(f"观察: {entry.content}")
         
+        if len(lines) == 1:
+            return ""
+
         return "\n".join(lines)
     
     def get_full_context(self) -> str:

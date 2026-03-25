@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Callable
 from abc import ABC, abstractmethod
 from datetime import datetime
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+
 from .memory import Memory, MemoryType
 from .observation import Observation, ObservationType
 from ..tools.base_tool import BaseTool, ToolResult
@@ -22,10 +24,9 @@ from ..assets import AssetManager, get_asset_manager
 class ConfirmationRequired(Exception):
     """需要用户确认时抛出的异常"""
     
-    def __init__(self, stage: str, proposal: str, code_preview: str = None, skills_referenced: List[Dict] = None):
+    def __init__(self, stage: str, proposal: str, skills_referenced: List[Dict] = None):
         self.stage = stage
         self.proposal = proposal
-        self.code_preview = code_preview
         self.skills_referenced = skills_referenced or []
         super().__init__(f"Stage '{stage}' requires user confirmation")
 
@@ -123,18 +124,8 @@ class ReActAgent(ABC):
             # 返回空字符串，让子类处理
             return ""
     
-    def _build_react_prompt(self, user_input: str, observation: str = "") -> str:
-        """
-        构建 ReAct 提示词
-        
-        包含：
-        1. 系统提示词
-        2. 可用工具
-        3. 记忆上下文
-        4. 当前观察
-        5. ReAct 格式说明
-        """
-        # 系统提示词
+    def _build_react_messages(self, user_input: str, observation: str = "") -> List[BaseMessage]:
+        """构建 ReAct chat messages。"""
         system_prompt = self.get_system_prompt()
         
         # 工具描述
@@ -147,40 +138,7 @@ class ReActAgent(ABC):
             )
         tools_text = "\n\n".join(tool_descriptions) if tool_descriptions else "无可用工具"
         
-        # 记忆上下文
-        memory_context = self.memory.get_short_term_context()
-        
-        # 如果有观察结果，说明工具已执行，需要直接输出最终答案
-        if observation and len(observation.strip()) > 0:
-            # 工具执行后的提示词 - 要求直接输出最终答案
-            prompt = f"""{system_prompt}
-
-## 可用工具
-
-{tools_text}
-
-## 执行历史
-
-{memory_context}
-
-## 当前任务
-
-用户输入: {user_input}
-
-观察结果:
-{observation}
-
-基于以上观察结果，请直接输出最终答案。
-你必须使用以下格式：
-
-思考: 基于观察结果进行总结
-最终答案: 你的完整回答
-
-请输出最终答案：
-"""
-        else:
-            # 初始提示词 - 使用完整 ReAct 格式
-            prompt = f"""{system_prompt}
+        system_content = f"""{system_prompt}
 
 ## 可用工具
 
@@ -198,18 +156,65 @@ class ReActAgent(ABC):
 当任务完成时，输出：
 思考: 任务已完成
 最终答案: 你的回答
-
-## 执行历史
-
-{memory_context}
-
-## 当前任务
-
-用户输入: {user_input}
-
-请按照 ReAct 格式进行思考和行动：
 """
-        return prompt
+
+        memory_context = self.memory.get_short_term_context(
+            include_user_messages=False,
+            include_assistant_messages=False,
+        )
+
+        user_sections: List[str] = []
+        if memory_context:
+            user_sections.extend([memory_context, ""])
+
+        user_sections.extend([
+            "## 当前任务",
+            "",
+            user_input,
+            "",
+        ])
+
+        if observation and len(observation.strip()) > 0:
+            user_sections.extend([
+                "观察结果:",
+                observation,
+                "",
+                "基于以上观察结果，请直接输出最终答案。",
+                "你必须使用以下格式：",
+                "",
+                "思考: 基于观察结果进行总结",
+                "最终答案: 你的完整回答",
+                "",
+                "请输出最终答案：",
+            ])
+        else:
+            user_sections.append("请按照 ReAct 格式进行思考和行动：")
+
+        return [
+            SystemMessage(content=system_content),
+            HumanMessage(content="\n".join(user_sections).strip()),
+        ]
+
+    def _serialize_llm_input(self, llm_input: Any) -> str:
+        """将最终发送给 LLM 的输入序列化为可审阅文本。"""
+        if isinstance(llm_input, str):
+            return llm_input
+
+        if isinstance(llm_input, list):
+            lines = ["## Final Chat Messages", ""]
+            for index, message in enumerate(llm_input, start=1):
+                role = getattr(message, "type", message.__class__.__name__).replace("Message", "").lower()
+                content = getattr(message, "content", str(message))
+                lines.extend([
+                    f"### Message {index}",
+                    f"- Role: {role}",
+                    "",
+                    str(content).strip(),
+                    "",
+                ])
+            return "\n".join(lines).strip()
+
+        return str(llm_input)
     
     def _parse_thought(self, text: str) -> Optional[str]:
         """解析思考过程"""
@@ -293,7 +298,7 @@ class ReActAgent(ABC):
                 error_type="tool_exception"
             )
     
-    def _call_llm(self, prompt: str, stage: str = "") -> Any:
+    def _call_llm(self, prompt: Any, stage: str = "", metadata: Dict[str, Any] = None) -> Any:
         """
         调用 LLM 并记录日志（使用流式输出）
         
@@ -337,13 +342,13 @@ class ReActAgent(ABC):
         self.llm_logger.log_call(
             model_name=model_name,
             provider=provider,
-            input_content=prompt,
+            input_content=self._serialize_llm_input(prompt),
             output_content=full_response,
-            stage=stage
+            stage=stage,
+            metadata=metadata
         )
         
         # 返回与 invoke 相同格式的响应对象
-        from langchain_core.messages import AIMessage
         return AIMessage(content=full_response)
     
     def _check_confirmation_required(self, stage: str) -> bool:
@@ -378,25 +383,10 @@ class ReActAgent(ABC):
         # 默认实现，子类应覆盖此方法
         return f"## {stage} 方案\n\n请确认此方案。"
     
-    def _generate_code_preview(self, stage: str, proposal: str) -> str:
-        """
-        生成代码预览（需要子类实现）
-        
-        Args:
-            stage: 工作流阶段
-            proposal: 方案内容
-            
-        Returns:
-            代码预览
-        """
-        # 默认实现，子类应覆盖此方法
-        return "# 代码预览\n# 将在确认后生成"
-    
     def request_confirmation(
         self,
         stage: str,
         proposal: str,
-        code_preview: str = None,
         skills_referenced: List[Dict] = None
     ):
         """
@@ -405,7 +395,6 @@ class ReActAgent(ABC):
         Args:
             stage: 工作流阶段
             proposal: 方案内容（Markdown 格式）
-            code_preview: 代码预览
             skills_referenced: 参考的 Skills 列表
             
         Raises:
@@ -417,7 +406,6 @@ class ReActAgent(ABC):
         confirmation_data = {
             "stage": stage,
             "proposal": proposal,
-            "code_preview": code_preview,
             "skills_referenced": skills_referenced,
             "timestamp": datetime.now().isoformat()
         }
@@ -427,7 +415,7 @@ class ReActAgent(ABC):
             "code"
         )
         
-        raise ConfirmationRequired(stage, proposal, code_preview, skills_referenced)
+        raise ConfirmationRequired(stage, proposal, skills_referenced)
     
     def resume_after_confirmation(
         self,
@@ -473,7 +461,7 @@ class ReActAgent(ABC):
             print(f"\n{'='*60}")
             print(f"[ReActAgent] 开始执行: {user_input[:50]}...")
             print(f"{'='*60}\n")
-        
+
         # 添加用户输入到记忆
         self.memory.add_user_message(user_input)
         
@@ -487,11 +475,18 @@ class ReActAgent(ABC):
                 print(f"\n--- 迭代 {iteration + 1}/{self.max_iterations} ---")
             
             # 构建提示词
-            prompt = self._build_react_prompt(user_input, observation)
+            prompt = self._build_react_messages(user_input, observation)
             
             # 调用 LLM（带日志记录）
             try:
-                response = self._call_llm(prompt, stage=stage)
+                response = self._call_llm(
+                    prompt,
+                    stage=stage,
+                    metadata={
+                        "prompt_scope": "final_actual_llm_input",
+                        "prompt_format": "chat_messages_system_user",
+                    }
+                )
             except Exception as e:
                 return {
                     "success": False,

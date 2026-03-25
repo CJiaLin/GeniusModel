@@ -1,9 +1,0 @@
-{
-  "success": true,
-  "metrics_result_path": "/Users/cjialin/code/AutoMLByLLM/assets/train_csv_v3_1774344333/features/feature_metrics.json",
-  "metrics_report_path": "/Users/cjialin/code/AutoMLByLLM/assets/train_csv_v3_1774344333/features/feature_metrics_report.md",
-  "feature_reliability_report_path": "/Users/cjialin/code/AutoMLByLLM/assets/train_csv_v3_1774344333/features/feature_reliability_report.md",
-  "features_data_path": "/Users/cjialin/code/AutoMLByLLM/assets/train_csv_v3_1774344333/data/features_data.csv",
-  "timestamp": "2026-03-24T17:38:25.279731",
-  "stage": "feature_evaluation"
-}

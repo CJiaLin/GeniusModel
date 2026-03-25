@@ -130,7 +130,8 @@ def test_start_workflow():
         "data_path": TRAIN_DATA_PATH,
         "target_column": "SalePrice",
         "task_type": "regression",
-        "model": "kimi-k2.5"
+        "model": "kimi-k2.5",
+        "task_description": "我希望建立一个房价预测模型，用于预测二手房的销售价格。请重点关注房屋面积、地段、建造年份等关键特征，并尝试多种回归算法进行对比。"
     }
     
     response = post_with_progress(url, json_body=data, timeout=120, label="启动工作流")
@@ -252,15 +253,10 @@ def test_feature_engineering_stage():
                     print(f"   - 评估结果: {eval_execution}")
 
                     report_path = eval_execution.get("metrics_report_path")
-                    reliability_path = eval_execution.get("feature_reliability_report_path")
                     if not report_path or not os.path.exists(report_path):
                         print("   ❌ 未生成特征分析报告 metrics_report_path")
                         return False
-                    if not reliability_path or not os.path.exists(reliability_path):
-                        print("   ❌ 未生成特征可解释性/可靠性报告 feature_reliability_report_path")
-                        return False
                     print(f"   ✅ 特征分析报告已生成: {report_path}")
-                    print(f"   ✅ 可解释性/可靠性报告已生成: {reliability_path}")
                 else:
                     print("   ❌ 未返回 feature_evaluation 确认点")
                     return False
@@ -295,9 +291,75 @@ def test_submit_confirmation_and_execute(confirmation_id, status="confirmed", mo
         return None
 
 
+def test_model_training_stage():
+    """步骤 5: 模型训练阶段 - 生成方案并执行"""
+    print_step(5, "模型训练阶段 (生成方案 + 确认执行)")
+
+    # 第一步：生成方案
+    url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/model_training/run"
+
+    data = {
+        "data_path": TRAIN_DATA_PATH,
+        "target_column": "SalePrice",
+        "task_type": "regression"
+    }
+
+    response = post_with_progress(url, json_body=data, timeout=900, label="生成模型训练方案")
+
+    if response.status_code != 200:
+        print(f"❌ 模型训练方案生成失败: {response.status_code} - {response.text}")
+        return False
+
+    result = response.json()
+    if not result.get("success"):
+        print(f"❌ 模型训练方案生成失败: {result.get('error', '未知错误')}")
+        return False
+
+    print(f"✅ 模型训练方案生成成功")
+    print(f"   - 方案长度: {len(result.get('proposal', ''))} 字符")
+
+    # 第二步：确认并执行
+    if not result.get("requires_confirmation"):
+        print("   ❌ 模型训练阶段未返回 requires_confirmation，流程异常")
+        return False
+
+    print(f"   提交确认并执行...")
+    exec_result = test_submit_confirmation_and_execute(
+        result.get("confirmation_id"),
+        "confirmed"
+    )
+    if not exec_result:
+        print("   ❌ 模型训练确认执行失败")
+        return False
+
+    execution = exec_result.get("execution", {})
+    print(f"   ✅ 模型训练执行完成")
+    print(f"   - 训练成功: {execution.get('success')}")
+    print(f"   - 模型路径: {execution.get('model_path')}")
+    print(f"   - 训练摘要: {execution.get('training_summary_path')}")
+
+    # 验证关键指标
+    metrics = execution.get("metrics", {})
+    if metrics:
+        print(f"   - 模型指标: {metrics}")
+
+    # 验证关键产物文件
+    model_path = execution.get("model_path")
+    if not model_path or not os.path.exists(model_path):
+        print(f"   ❌ 模型文件未生成: {model_path}")
+        return False
+    print(f"   ✅ 模型文件已生成: {model_path}")
+
+    training_summary_path = execution.get("training_summary_path")
+    if training_summary_path and os.path.exists(training_summary_path):
+        print(f"   ✅ 训练摘要已生成: {training_summary_path}")
+
+    return True
+
+
 def test_list_assets():
-    """步骤 5: 列出所有资产"""
-    print_step(5, "列出所有生成的资产")
+    """步骤 6: 列出所有资产"""
+    print_step(6, "列出所有生成的资产")
     
     url = f"{BASE_URL}/assets/{SESSION_ID}/list"
     
@@ -315,21 +377,33 @@ def test_list_assets():
                 print(f"     * {f.get('name')} ({f.get('size', 0)} bytes)")
         print(f"   总计: {total_files} 个文件")
 
-        # 关键产物校验
+        # 关键产物校验 - 特征工程
         features_files = [f.get('name') for f in assets.get('features', [])]
-        required = {
+        required_features = {
             "feature_engineering_plan.md",
             "feature_engineering_result.json",
             "feature_metrics.json",
             "feature_metrics_report.md",
-            "feature_reliability_report.md",
             "feature_evaluation_result.json",
         }
-        missing = [x for x in required if x not in features_files]
+        missing = [x for x in required_features if x not in features_files]
         if missing:
             print(f"❌ 缺少关键特征评估产物: {missing}")
             return False
-        print("✅ 特征评估与可解释性报告产物校验通过")
+        print("✅ 特征评估产物校验通过")
+
+        # 关键产物校验 - 模型训练
+        models_files = [f.get('name') for f in assets.get('models', [])]
+        required_models = {
+            "model_training_plan.md",
+            "model_training_result.json",
+            "trained_model.pkl",
+        }
+        missing = [x for x in required_models if x not in models_files]
+        if missing:
+            print(f"❌ 缺少关键模型训练产物: {missing}")
+            return False
+        print("✅ 模型训练产物校验通过")
         return True
     else:
         print(f"❌ 资产列表获取失败: {response.status_code} - {response.text}")
@@ -366,7 +440,10 @@ def main():
     # 步骤 4: 特征工程 (生成方案 + 执行)
     results.append(("特征工程", test_feature_engineering_stage()))
 
-    # 步骤 5: 列出资产
+    # 步骤 5: 模型训练 (生成方案 + 执行)
+    results.append(("模型训练", test_model_training_stage()))
+
+    # 步骤 6: 列出资产
     results.append(("列出资产", test_list_assets()))
     
     # 打印测试总结

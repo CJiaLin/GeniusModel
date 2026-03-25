@@ -51,39 +51,21 @@ class DataExplorationAgent(ReActAgent):
 
     def get_system_prompt(self) -> str:
         """获取系统提示词"""
-        return """你是一位专业的数据探索性分析专家，专门分析清洗后的数据。
+        return self.config_loader.get_prompt("data_exploration", "system_prompt")
 
-你的职责：
-1. 分析数据分布特征（均值、方差、偏度、峰度等）
-2. 分析特征相关性（相关系数矩阵）
-3. 分析目标变量分布
-4. 为特征工程提供建议
-
-**重要原则**：
-- 必须使用用户上传的实际数据文件进行分析
-- 禁止使用示例数据或虚构数据
-- 所有分析结果必须基于实际数据的统计信息
-- 你分析的是已经清洗过的干净数据
-
-工作原则：
-- 专注于数据的统计特征和分布
-- 分析特征之间的相关性
-- 为特征工程提供有价值的建议
-- 生成 Markdown 格式的分析报告
-
-你可以使用以下工具来完成任务：
-- load_data: 加载数据文件
-- analyze_data: 分析数据的统计信息
-
-请按照 ReAct 格式进行思考和行动。"""
+    def _get_exploration_skill_content(self) -> str:
+        """获取探索性分析阶段使用的 skill 参考内容。"""
+        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
+        if not techniques:
+            return ""
+        return f"## 数据分析技术参考\n\n{techniques}\n"
 
     def explore(
         self,
         data_path: str,
         target_column: str = None,
         task_type: str = "classification",
-        task_description: str = "",
-        cleaning_report: str = None
+        task_description: str = ""
     ) -> Dict[str, Any]:
         """
         对清洗后的数据进行探索性分析
@@ -93,7 +75,6 @@ class DataExplorationAgent(ReActAgent):
             target_column: 目标列名
             task_type: 任务类型
             task_description: 用户的建模背景和要求
-            cleaning_report: 数据清洗报告（可选）
 
         Returns:
             探索性分析结果
@@ -115,19 +96,14 @@ class DataExplorationAgent(ReActAgent):
                 "memory_usage": df.memory_usage(deep=True).sum() / 1024 / 1024
             }
 
-            # 构建数据摘要
-            data_summary = self._build_data_summary(df)
+            # 构建当前数据上下文
+            current_data_context = self._build_data_summary(df)
 
         except Exception as e:
-            data_summary = f"无法加载数据文件: {data_path}\n错误: {str(e)}"
+            current_data_context = f"无法加载数据文件: {data_path}\n错误: {str(e)}"
 
         # 加载 data-analysis skill 内容
-        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
-
-        # 构建 skill 内容
-        skill_content = ""
-        if techniques:
-            skill_content += f"## 数据分析技术参考\n\n{techniques[:1500]}\n\n"
+        skill_content = self._get_exploration_skill_content()
 
         # 构建用户提示词
         task_context = ""
@@ -140,33 +116,27 @@ class DataExplorationAgent(ReActAgent):
 **重要：请在探索性分析中充分考虑用户的建模背景和要求。**
 
 """
+        self.task_context = task_context
 
-        cleaning_context = ""
-        if cleaning_report:
-            cleaning_context = f"""
-## 数据清洗报告（来自数据清洗阶段）
+        cleaning_context = f"""
+    ## 前序清洗说明
 
-{cleaning_report[:2000]}
+    数据清洗阶段已完成，当前传入的数据文件就是清洗结果数据。
 
-**重要：请结合清洗报告中的处理内容进行探索性分析。**
+    **重要：本阶段唯一有效的数据来源是当前传入的数据文件路径 `{data_path}`。如果任何历史文本与当前文件实际读取结果冲突，必须以当前文件实际读取结果为准。**
 
-"""
+    """
 
-        user_input = f"""请对以下清洗后的数据进行探索性分析：
-
-{task_context}{cleaning_context}{data_summary}
-
-{skill_content}
-
-请生成 Markdown 格式的探索性分析报告，包括：
-1. 数据分布特征分析（均值、方差、偏度、峰度等）
-2. 特征相关性分析（相关系数矩阵，找出高相关特征对）
-3. 目标变量分析（如果指定了目标列）
-4. 特征重要性初步评估
-5. **特征工程建议**
-
-重要：分析完成后，必须明确指出下一步应该进行特征工程。
-"""
+        prompt_template = self.config_loader.get_prompt("data_exploration", "exploration_prompt")
+        user_input = prompt_template.format(
+            data_path=data_path,
+            target_column=target_column or "",
+            task_type=task_type,
+            task_context=task_context,
+            cleaning_context=cleaning_context,
+            current_data_context=current_data_context,
+            skill_content=skill_content,
+        )
 
         # 调用 LLM 生成报告
         result = self.run(user_input, stage="data_exploration")
@@ -282,16 +252,12 @@ class DataExplorationAgent(ReActAgent):
         if not self.exploration_result:
             return "请先进行探索性分析"
 
-        user_input = f"""基于以下探索性分析结果，生成具体的特征工程建议：
-
-{self.exploration_result}
-
-请生成具体的特征工程建议，包括：
-1. 特征变换建议（标准化、归一化、对数变换等）
-2. 特征组合建议
-3. 特征选择建议
-4. 编码建议（分类变量）
-"""
+        prompt_template = self.config_loader.get_prompt("data_exploration", "feature_suggestions_prompt")
+        user_input = prompt_template.format(
+            exploration_result=self.exploration_result,
+            skill_content=self._get_exploration_skill_content(),
+            task_context=getattr(self, 'task_context', ''),
+        )
 
         result = self.run(user_input, stage="feature_suggestions")
 

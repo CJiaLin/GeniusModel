@@ -11,6 +11,8 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 
+from ..assets import get_asset_manager
+
 
 @dataclass
 class LLMCallRecord:
@@ -80,6 +82,7 @@ class LLMLogger:
 
         self.log_dir = Path(log_dir)
         self.session_id = session_id or "default"
+        self.asset_manager = get_asset_manager(session_id=self.session_id)
 
         # 创建会话日志目录
         self.session_log_dir = self.log_dir / self.session_id
@@ -127,6 +130,25 @@ class LLMLogger:
         Returns:
             LLMCallRecord 记录对象
         """
+        prompt_metadata = dict(metadata or {})
+        save_prompt_asset = prompt_metadata.pop("_save_prompt_asset", True)
+        prompt_asset_content = prompt_metadata.pop("_prompt_asset_content", input_content)
+        prompt_asset = None
+        if save_prompt_asset:
+            prompt_asset = self.asset_manager.save_prompt_for_stage(
+                prompt=prompt_asset_content,
+                stage=stage,
+                metadata={
+                    "stage": stage,
+                    "model_name": model_name,
+                    "provider": provider,
+                    **prompt_metadata,
+                }
+            )
+        if prompt_asset is not None:
+            prompt_metadata["prompt_asset_path"] = prompt_asset.path
+            prompt_metadata["prompt_asset_type"] = prompt_asset.type
+
         record = LLMCallRecord(
             session_id=self.session_id,
             timestamp=datetime.now().isoformat(),
@@ -139,7 +161,7 @@ class LLMLogger:
             total_tokens=input_tokens + output_tokens,
             latency_ms=latency_ms,
             stage=stage,
-            metadata=metadata or {}
+            metadata=prompt_metadata
         )
 
         self._write_record(record)

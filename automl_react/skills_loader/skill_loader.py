@@ -227,7 +227,14 @@ class SkillLoader:
         Returns:
             Skill 对象，如果不存在返回 None
         """
-        return self._skills.get(skill_name)
+        if skill_name in self._skills:
+            return self._skills.get(skill_name)
+
+        skill_path = self.skills_dir / skill_name
+        if not skill_path.exists():
+            return None
+
+        return self.load_skill(skill_name)
 
     def get_skill_content(self, skill_name: str) -> Optional[str]:
         """

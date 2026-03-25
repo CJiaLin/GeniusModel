@@ -8,6 +8,8 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from ..core.react_agent import ReActAgent, ConfirmationRequired
 from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
 from ..skills_loader import get_skill_loader
@@ -54,24 +56,24 @@ class FeatureEngineeringAgent(ReActAgent):
 
     def get_system_prompt(self) -> str:
         """获取系统提示词"""
-        try:
-            return self.config_loader.get_prompt("feature_engineering", "system_prompt")
-        except KeyError:
-            return """你是一位专业的特征工程专家。
+        return self.config_loader.get_prompt("feature_engineering", "system_prompt")
 
-你的职责：
-1. 分析数据特征
-2. 生成特征工程方案
-3. 编写特征工程代码
-4. 执行特征工程并验证结果
+    def _get_phase2_skill_content(self) -> str:
+        """获取特征工程阶段使用的 skill 参考内容。"""
+        skill_content = self.skill_loader.get_skill_content("afrexai-ml-engineering-1.0.0")
+        if not skill_content:
+            return ""
 
-**重要原则**：
-- 必须使用用户上传的实际数据文件进行特征工程
-- 禁止使用示例数据或虚构数据
-- 所有特征工程方案必须基于实际数据的列名和特征
-- 特征工程代码必须针对实际数据的列名和特征
+        import re
 
-请基于数据特征和最佳实践，生成详细的特征工程方案。"""
+        phase2_match = re.search(
+            r'##?\s*Phase\s*2[:：]\s*Data Engineering.*?\n(.*?)(?=##?\s*Phase\s*3|\Z)',
+            skill_content,
+            re.DOTALL | re.IGNORECASE
+        )
+        if phase2_match:
+            return phase2_match.group(1)
+        return skill_content
 
     def analyze_features(self, data_path: str, target_column: str) -> Dict[str, Any]:
         """
@@ -87,8 +89,8 @@ class FeatureEngineeringAgent(ReActAgent):
         self.data_path = data_path
         self.target_column = target_column
 
-        # 构建分析提示词
-        user_input = f"请分析数据文件的特征: {data_path}, 目标列: {target_column}"
+        prompt_template = self.config_loader.get_prompt("feature_engineering", "analysis_prompt")
+        user_input = prompt_template.format(data_path=data_path, target_column=target_column)
 
         result = self.run(user_input, stage="feature_analysis")
 
@@ -103,7 +105,6 @@ class FeatureEngineeringAgent(ReActAgent):
         target_column: str = None,
         task_type: str = "classification",
         analysis_result: str = None,
-        cleaning_result: str = None,
         cleaned_data_path: str = None,
         task_description: str = ""
     ) -> str:
@@ -114,8 +115,7 @@ class FeatureEngineeringAgent(ReActAgent):
             data_path: 数据文件路径
             target_column: 目标列名
             task_type: 任务类型
-            analysis_result: 数据分析报告（可选）
-            cleaning_result: 数据清洗报告（可选，当前阶段默认不融合该内容）
+            analysis_result: 探索性分析报告（可选）
             cleaned_data_path: 清洗后的数据路径（可选，如果提供则使用此路径）
             task_description: 用户的建模背景和要求
 
@@ -133,12 +133,11 @@ class FeatureEngineeringAgent(ReActAgent):
         self.target_column = target
         self.task_type = task_type
 
-        # 构建上下文摘要
-        context_summary = ""
+        task_context = ""
         
         # 添加用户的建模背景
         if task_description:
-            context_summary += f"""
+            task_context = f"""
 ## 用户建模背景和要求
 
 {task_description}
@@ -146,11 +145,12 @@ class FeatureEngineeringAgent(ReActAgent):
 **重要：请在特征工程方案中充分考虑用户的建模背景和要求。**
 
 """
+        self.task_context = task_context
         
-        # 如果有分析报告，添加到上下文
+        exploration_context = ""
         if analysis_result:
-            context_summary += f"""
-## 数据分析报告（来自数据分析阶段）
+            exploration_context = f"""
+## 探索性分析报告（来自数据探索阶段）
 
 {analysis_result}
 
@@ -172,12 +172,12 @@ class FeatureEngineeringAgent(ReActAgent):
                 "target_unique": df[target].nunique() if target in df.columns else 0
             }
 
-            # 构建数据摘要
-            data_summary = f"""
-{context_summary}
+            # 构建当前数据上下文
+            current_data_context = f"""
 ## 当前数据基本信息
 
 - **数据路径**: {path}
+- **数据来源说明**: 数据清洗阶段已完成，当前输入文件为清洗结果数据
 - **数据形状**: {self.data_info['shape'][0]} 行 × {self.data_info['shape'][1]} 列
 - **目标列**: {target}
 - **目标列类型**: {self.data_info['target_dtype']}
@@ -207,71 +207,28 @@ class FeatureEngineeringAgent(ReActAgent):
             }
 
         except Exception as e:
-            data_summary = f"无法加载数据文件: {path}\n错误: {str(e)}"
+            current_data_context = f"无法加载数据文件: {path}\n错误: {str(e)}"
             verified_facts = {
                 "data_path": path,
                 "error": str(e)
             }
 
         # 加载 afrexai-ml-engineering skill 的 Phase 2
-        skill_content = self.skill_loader.get_skill_content("afrexai-ml-engineering-1.0.0")
-
-        # 提取 Phase 2 相关内容
-        phase2_content = ""
-        if skill_content:
-            import re
-            phase2_match = re.search(
-                r'##?\s*Phase\s*2[:：]\s*Data Engineering.*?\n(.*?)(?=##?\s*Phase\s*3|\Z)',
-                skill_content,
-                re.DOTALL | re.IGNORECASE
-            )
-            if phase2_match:
-                phase2_content = phase2_match.group(1)
-            else:
-                phase2_content = skill_content[:3000]
+        phase2_content = self._get_phase2_skill_content()
 
         # 从配置加载 Prompt
-        try:
-            prompt_template = self.config_loader.get_prompt("feature_engineering", "plan_generation")
-        except KeyError:
-            prompt_template = """请为以下数据生成详细的特征工程方案：
-
-{data_summary}
-
-任务类型: {task_type}
-
-{skill_content}
-
-请生成 Markdown 格式的特征工程方案，包括：
-1. 现有特征分析
-2. 特征工程策略
-3. 要生成的新特征列表
-4. 预期效果
-
-重要：方案必须基于上述实际数据分析结果。
-"""
+        prompt_template = self.config_loader.get_prompt("feature_engineering", "plan_generation")
 
         user_input = prompt_template.format(
             data_path=path,
             target_column=target,
             task_type=task_type,
-            data_summary=data_summary,
-            skill_content=phase2_content
+            task_context=task_context,
+            exploration_context=exploration_context,
+            current_data_context=current_data_context,
+            skill_content=phase2_content,
+            verified_facts_json=json.dumps(verified_facts, ensure_ascii=False, indent=2),
         )
-
-        user_input += f"""
-
-    ## 严格约束（必须遵守）
-
-    1. 你必须先使用 `load_data` 或 `analyze_data` 对以下路径做实时校验：`{path}`。
-    2. 你输出中的数据规模（行数、列数、数值列数量、类别列数量）必须与工具观察一致。
-    3. 若历史文本（如清洗方案、经验模板）与工具观察冲突，必须以工具观察为准。
-    4. 禁止引用与当前数据文件不一致的列名和统计值。
-
-    ## 已验证数据事实快照（仅用于对齐校验）
-
-    {json.dumps(verified_facts, ensure_ascii=False, indent=2)}
-    """
 
         # 调用 LLM 生成方案
         result = self.run(user_input, stage="feature_engineering_plan")
@@ -290,9 +247,6 @@ class FeatureEngineeringAgent(ReActAgent):
         if not self.feature_plan:
             raise ValueError("请先生成特征工程方案")
 
-        # 生成代码预览
-        code_preview = self._generate_code_preview()
-
         # 参考的 skills
         skills_referenced = [
             {
@@ -305,31 +259,8 @@ class FeatureEngineeringAgent(ReActAgent):
         raise ConfirmationRequired(
             stage="feature_engineering",
             proposal=self.feature_plan,
-            code_preview=code_preview,
             skills_referenced=skills_referenced
         )
-
-    def _generate_code_preview(self) -> str:
-        """生成代码预览"""
-        if not self.feature_plan:
-            return "# 代码将在确认后生成"
-
-        # 从配置加载 Prompt
-        try:
-            prompt_template = self.config_loader.get_prompt("feature_engineering", "code_generation")
-        except KeyError:
-            prompt_template = """基于以下特征工程方案，生成 Python 代码预览：
-
-{plan}
-
-请生成简洁的代码预览（仅展示主要步骤）。
-"""
-
-        user_input = prompt_template.format(plan=self.feature_plan[:1000])
-
-        result = self.run(user_input, stage="feature_engineering_code_preview")
-
-        return result.get("answer", "# 代码预览")
 
     def generate_feature_code(self, modifications: str = None) -> str:
         """
@@ -362,33 +293,23 @@ class FeatureEngineeringAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
         self.features_data_path = str(self.asset_manager.session_dir / "data" / "features_data.csv")
+        skill_content = self._get_phase2_skill_content()
 
-        task_prompt = f"""基于以下特征工程方案，生成完整的 Python 代码：
-
-数据路径: {self.data_path}
-目标列: {self.target_column}
-任务类型: {self.task_type}
-{data_info_text}
-
-特征工程方案:
-{self.feature_plan}
-
-{modifications_text}
-
-要求：
-1. 使用 pandas 和 scikit-learn 进行特征工程
-2. 包含详细的注释
-3. 保存特征工程后的数据到: {self.features_data_path}
-4. 返回新生成的特征列表
-5. 代码必须完整可执行，包含所有必要的导入语句
-6. 必须使用上述实际数据的列名
-7. 必须包含明确的数据保存语句，将特征工程结果保存到: {self.features_data_path}
-
-请生成完整的、可执行的 Python 代码。
-"""
+        prompt_template = self.config_loader.get_prompt("feature_engineering", "code_generation_full")
+        task_prompt = prompt_template.format(
+            data_path=self.data_path,
+            target_column=self.target_column,
+            task_type=self.task_type,
+            data_info_text=data_info_text,
+            plan=self.feature_plan,
+            skill_content=skill_content,
+            modifications=modifications_text,
+            features_data_path=self.features_data_path,
+            task_context=getattr(self, 'task_context', ''),
+        )
 
         # 使用 CodeActAgent 生成并执行代码
-        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300)
+        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300, session_id=self.session_id)
 
         context = {
             "data_path": self.data_path,
@@ -405,6 +326,7 @@ class FeatureEngineeringAgent(ReActAgent):
             required_filepath=self.features_data_path,
             output_validator=self._validate_features_output,
             deterministic_fallback=self._deterministic_feature_fallback,
+            stage="feature_engineering_code_generation",
         )
 
         if result.success:
@@ -505,20 +427,43 @@ class FeatureEngineeringAgent(ReActAgent):
         except Exception as e:
             return False, f"保存特征工程结果失败: {e}"
 
-    def _generate_markdown_text(self, prompt: str) -> str:
+    def _generate_markdown_text(self, prompt: str, stage: str = "") -> str:
         """直接生成 Markdown 文本，不经过 CodeAct 执行链路。"""
         if not self.llm:
             raise ValueError("LLM 未初始化，无法生成报告")
 
+        messages = [
+            SystemMessage(content=self.get_system_prompt()),
+            HumanMessage(content=prompt),
+        ]
         full_response = ""
+        start_time = datetime.now()
 
         try:
-            for chunk in self.llm.stream(prompt):
+            for chunk in self.llm.stream(messages):
                 if chunk.content:
                     full_response += chunk.content
         except Exception:
-            response = self.llm.invoke(prompt)
+            response = self.llm.invoke(messages)
             full_response = response.content if hasattr(response, "content") else str(response)
+
+        llm_config = self.config_loader.get_llm_config()
+        model_name = llm_config.get("model_name", "unknown")
+        provider = llm_config.get("provider", "unknown")
+        latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+        self.llm_logger.log_call(
+            model_name=model_name,
+            provider=provider,
+            input_content=self._serialize_llm_input(messages),
+            output_content=full_response,
+            latency_ms=latency_ms,
+            stage=stage,
+            metadata={
+                "call_type": "direct_generation",
+                "prompt_scope": "final_actual_llm_input",
+                "prompt_format": "chat_messages_system_user",
+            }
+        )
 
         content = full_response.strip()
         if content.startswith("```markdown"):
@@ -572,46 +517,26 @@ class FeatureEngineeringAgent(ReActAgent):
 
         metrics_result_path = str(self.asset_manager.session_dir / "features" / "feature_metrics.json")
         metrics_report_path = str(self.asset_manager.session_dir / "features" / "feature_metrics_report.md")
-        reliability_report_path = str(self.asset_manager.session_dir / "features" / "feature_reliability_report.md")
         modifications_text = f"\n用户关注点/补充要求:\n{modifications}\n" if modifications else ""
         
         # ========== 第一步：生成并执行指标计算代码 ==========
         print(f"\n[CodeAct] 第一步：计算特征指标...")
         
-        metrics_task_prompt = f"""基于以下特征数据，计算特征指标：
-
-特征数据路径: {self.features_data_path}
-目标列: {self.target_column}
-任务类型: {self.task_type}
-指标结果保存路径: {metrics_result_path}
-
-请计算以下指标并保存为 JSON 文件：
-1. **IV 值（Information Value）**：评估特征对目标的预测能力
-   - 对于分类任务：计算每个特征的 IV 值
-   - 对于回归任务：将目标离散化后计算 IV 值
-2. **相关性分析**：计算特征与目标的相关系数
-3. **特征重要性**：使用随机森林计算特征重要性
-4. **方差分析**：计算特征的方差，识别低方差特征
-5. **缺失率统计**：统计每个特征的缺失率
-
-输出要求：
-1. 将所有指标结果保存为 JSON 文件: {metrics_result_path}
-2. JSON 格式示例：
-{{
-    "iv_values": {{"feature1": 0.5, "feature2": 0.3, ...}},
-    "correlations": {{"feature1": 0.8, "feature2": 0.6, ...}},
-    "feature_importance": {{"feature1": 0.15, "feature2": 0.12, ...}},
-    "variances": {{"feature1": 1.5, "feature2": 0.8, ...}},
-    "missing_rates": {{"feature1": 0.0, "feature2": 0.05, ...}}
-}}
-
-请生成完整的、可执行的 Python 代码。
-"""
+        prompt_template = self.config_loader.get_prompt("feature_engineering", "metrics_code_generation")
+        metrics_task_prompt = prompt_template.format(
+            features_data_path=self.features_data_path,
+            target_column=self.target_column,
+            task_type=self.task_type,
+            metrics_result_path=metrics_result_path,
+            skill_content=self._get_phase2_skill_content(),
+            modifications_text=modifications_text,
+            task_context=getattr(self, 'task_context', ''),
+        )
 
         # 使用 CodeActAgent 生成并执行代码
         from ..utils.codeact_agent import CodeActAgent
         
-        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300)
+        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300, session_id=self.session_id)
         
         context = {
             "features_data_path": self.features_data_path,
@@ -624,7 +549,8 @@ class FeatureEngineeringAgent(ReActAgent):
         result = codeact.generate_and_execute(
             task_prompt=metrics_task_prompt,
             context=context,
-            required_outputs=[]
+            required_outputs=[],
+            stage="feature_metrics_code_generation"
         )
 
         if not result.success:
@@ -632,6 +558,21 @@ class FeatureEngineeringAgent(ReActAgent):
             raise ValueError(f"特征指标计算失败: {result.error}")
 
         print(f"\n[CodeAct] 特征指标计算成功，迭代次数: {result.iterations}")
+        if result.code:
+            self.asset_manager.save_code(
+                code=result.code,
+                filename="feature_metrics.py",
+                metadata={
+                    "stage": "feature_evaluation",
+                    "data_path": self.features_data_path,
+                    "target_column": self.target_column,
+                    "task_type": self.task_type,
+                    "execution_success": result.success,
+                    "execution_error": result.error,
+                    "iterations": result.iterations,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
         
         # 检查指标结果文件是否生成
         if not os.path.exists(metrics_result_path):
@@ -647,55 +588,24 @@ class FeatureEngineeringAgent(ReActAgent):
         with open(metrics_result_path, 'r') as f:
             metrics_data = json.load(f)
         
-        report_task_prompt = f"""基于以下特征指标数据，生成详细的特征分析报告：
-
-特征数据路径: {self.features_data_path}
-目标列: {self.target_column}
-任务类型: {self.task_type}
-指标数据: {json.dumps(metrics_data, indent=2, ensure_ascii=False)}
-报告保存路径: {metrics_report_path}
-    {modifications_text}
-
-请生成详细的特征分析报告（Markdown 格式），包含以下内容：
-
-## 1. 指标概览
-- 各指标计算结果汇总表格
-- 指标分布统计
-
-## 2. 特征评估
-- 高预测能力特征（IV > 0.3）
-- 中等预测能力特征（0.1 < IV <= 0.3）
-- 低预测能力特征（IV <= 0.1）
-- 高相关性特征（|corr| > 0.7）
-- 低方差特征（方差接近 0）
-- 高缺失率特征（缺失率 > 10%）
-
-## 3. 特征可解释性分析
-- 从特征重要性、相关性、IV 等角度解释关键特征对目标的影响
-- 区分稳定贡献特征与可能噪声特征
-- 给出业务可解释的结论（使用自然语言）
-
-## 4. 特征可靠性分析
-- 数据质量可靠性：缺失率、异常值敏感性、低方差特征风险
-- 统计可靠性：高相关冗余、多重共线性风险
-- 泛化可靠性：潜在数据泄漏风险、分布漂移敏感特征提示
-- 给出高/中/低风险特征清单与处理建议
-
-## 5. 特征筛选建议
-- 建议保留的特征列表
-- 建议删除的特征列表及原因
-- 需要进一步处理的特征
-
-## 6. 特征优化建议
-- 特征工程优化方向
-- 模型选择建议
-- 后续改进方向
-
-请生成完整的 Markdown 格式报告，保存到: {metrics_report_path}
-"""
+        prompt_template = self.config_loader.get_prompt("feature_engineering", "metrics_report_generation")
+        report_task_prompt = prompt_template.format(
+            features_data_path=self.features_data_path,
+            target_column=self.target_column,
+            task_type=self.task_type,
+            feature_plan=self.feature_plan or "无",
+            metrics_data=json.dumps(metrics_data, indent=2, ensure_ascii=False),
+            metrics_report_path=metrics_report_path,
+            skill_content=self._get_phase2_skill_content(),
+            modifications_text=modifications_text,
+            task_context=getattr(self, 'task_context', ''),
+        )
 
         try:
-            report_content = self._generate_markdown_text(report_task_prompt)
+            report_content = self._generate_markdown_text(
+                report_task_prompt,
+                stage="feature_metrics_report_generation"
+            )
             report_ok, report_msg = self._write_report_file(metrics_report_path, report_content)
         except Exception as e:
             print(f"\n[LLM] 特征分析报告生成失败: {e}")
@@ -703,7 +613,6 @@ class FeatureEngineeringAgent(ReActAgent):
                 "success": True,
                 "metrics_result_path": metrics_result_path,
                 "metrics_report_path": None,
-                "feature_reliability_report_path": None,
                 "error": str(e),
                 "features_data_path": self.features_data_path,
                 "timestamp": datetime.now().isoformat()
@@ -711,54 +620,15 @@ class FeatureEngineeringAgent(ReActAgent):
 
         if report_ok:
             print(f"\n[LLM] 特征分析报告生成成功")
-
-            # 额外生成可靠性专题报告（可解释性/可靠性聚焦）
-            reliability_task_prompt = f"""基于以下特征指标，生成一份聚焦“可解释性与可靠性”的专题报告：
-
-特征数据路径: {self.features_data_path}
-目标列: {self.target_column}
-任务类型: {self.task_type}
-指标数据: {json.dumps(metrics_data, indent=2, ensure_ascii=False)}
-报告保存路径: {reliability_report_path}
-{modifications_text}
-
-请输出 Markdown 报告，必须包含：
-1. 执行摘要（3-5 条核心结论）
-2. 可解释性评估：关键特征解释、方向性、稳定贡献
-3. 可靠性评估：冗余风险、低方差风险、缺失风险、泄漏风险
-4. 风险分级清单（高/中/低）
-5. 可执行改进建议（按优先级）
-
-请将内容保存到: {reliability_report_path}
-"""
-            reliability_exists = False
-            reliability_error = None
-            try:
-                reliability_content = self._generate_markdown_text(reliability_task_prompt)
-                reliability_ok, reliability_msg = self._write_report_file(
-                    reliability_report_path,
-                    reliability_content,
-                )
-                reliability_exists = reliability_ok
-                if not reliability_ok:
-                    reliability_error = reliability_msg
-            except Exception as e:
-                reliability_error = str(e)
-                print(f"[LLM] 特征可靠性专题报告生成失败: {e}")
             
             # 检查报告文件是否生成
             if os.path.exists(metrics_report_path):
                 print(f"[Agent] 特征分析报告已保存到: {metrics_report_path}")
-                if reliability_exists:
-                    print(f"[Agent] 特征可靠性专题报告已保存到: {reliability_report_path}")
-                elif reliability_error:
-                    print(f"[Agent] 特征可靠性专题报告未生成: {reliability_error}")
                 
                 return {
                     "success": True,
                     "metrics_result_path": metrics_result_path,
                     "metrics_report_path": metrics_report_path,
-                    "feature_reliability_report_path": reliability_report_path if reliability_exists else None,
                     "features_data_path": self.features_data_path,
                     "timestamp": datetime.now().isoformat()
                 }
@@ -768,7 +638,6 @@ class FeatureEngineeringAgent(ReActAgent):
                     "success": True,
                     "metrics_result_path": metrics_result_path,
                     "metrics_report_path": None,
-                    "feature_reliability_report_path": reliability_report_path if reliability_exists else None,
                     "features_data_path": self.features_data_path,
                     "timestamp": datetime.now().isoformat()
                 }
@@ -778,7 +647,6 @@ class FeatureEngineeringAgent(ReActAgent):
                 "success": True,
                 "metrics_result_path": metrics_result_path,
                 "metrics_report_path": None,
-                "feature_reliability_report_path": None,
                 "error": report_msg,
                 "features_data_path": self.features_data_path,
                 "timestamp": datetime.now().isoformat()

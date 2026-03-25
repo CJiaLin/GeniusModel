@@ -34,16 +34,6 @@ class SkillReference:
 
 
 @dataclass
-class CodePreview:
-    """Code preview for the proposal."""
-    language: str
-    code: str
-    file_name: Optional[str] = None
-    line_start: Optional[int] = None
-    line_end: Optional[int] = None
-
-
-@dataclass
 class UserResponse:
     """User response to a confirmation point."""
     status: ConfirmationStatus
@@ -63,7 +53,6 @@ class UserConfirmationPoint:
         stage: Workflow stage (e.g., "data_cleaning", "feature_engineering", "modeling")
         proposal_content: The proposal content in Markdown format
         skills_referenced: List of skills referenced in the proposal
-        code_preview: Optional code preview
         expected_outcome: Description of expected outcome
         user_response: User's response to this confirmation point
         created_at: Creation timestamp
@@ -74,7 +63,6 @@ class UserConfirmationPoint:
     stage: str = ""
     proposal_content: str = ""
     skills_referenced: List[SkillReference] = field(default_factory=list)
-    code_preview: Optional[CodePreview] = None
     expected_outcome: str = ""
     user_response: Optional[UserResponse] = None
     created_at: datetime = field(default_factory=datetime.now)
@@ -134,13 +122,6 @@ class UserConfirmationPoint:
                 }
                 for s in self.skills_referenced
             ],
-            "code_preview": {
-                "language": self.code_preview.language,
-                "code": self.code_preview.code,
-                "file_name": self.code_preview.file_name,
-                "line_start": self.code_preview.line_start,
-                "line_end": self.code_preview.line_end
-            } if self.code_preview else None,
             "expected_outcome": self.expected_outcome,
             "user_response": {
                 "status": self.user_response.status.value,
@@ -167,17 +148,6 @@ class UserConfirmationPoint:
             for s in data.get("skills_referenced", [])
         ]
 
-        code_preview = None
-        if data.get("code_preview"):
-            cp = data["code_preview"]
-            code_preview = CodePreview(
-                language=cp["language"],
-                code=cp["code"],
-                file_name=cp.get("file_name"),
-                line_start=cp.get("line_start"),
-                line_end=cp.get("line_end")
-            )
-
         user_response = None
         if data.get("user_response"):
             ur = data["user_response"]
@@ -194,7 +164,6 @@ class UserConfirmationPoint:
             stage=data["stage"],
             proposal_content=data["proposal_content"],
             skills_referenced=skills,
-            code_preview=code_preview,
             expected_outcome=data.get("expected_outcome", ""),
             user_response=user_response,
             created_at=datetime.fromisoformat(data["created_at"]),
@@ -252,7 +221,6 @@ class ConfirmationManager:
         stage: str,
         proposal_content: str,
         skills_referenced: Optional[List[SkillReference]] = None,
-        code_preview: Optional[CodePreview] = None,
         expected_outcome: str = "",
         timeout_seconds: Optional[float] = None,
         metadata: Optional[Dict[str, Any]] = None
@@ -264,7 +232,6 @@ class ConfirmationManager:
             stage: Workflow stage
             proposal_content: Proposal content in Markdown format
             skills_referenced: List of referenced skills
-            code_preview: Optional code preview
             expected_outcome: Description of expected outcome
             timeout_seconds: Optional timeout in seconds
             metadata: Additional metadata
@@ -276,7 +243,6 @@ class ConfirmationManager:
             stage=stage,
             proposal_content=proposal_content,
             skills_referenced=skills_referenced or [],
-            code_preview=code_preview,
             expected_outcome=expected_outcome,
             timeout_seconds=timeout_seconds,
             metadata=metadata or {}
@@ -395,8 +361,7 @@ class ConfirmationManager:
         self,
         point_id: str,
         modified_proposal: str,
-        new_skills_referenced: Optional[List[SkillReference]] = None,
-        new_code_preview: Optional[CodePreview] = None
+        new_skills_referenced: Optional[List[SkillReference]] = None
     ) -> Optional[UserConfirmationPoint]:
         """
         Create a new confirmation point based on user modifications.
@@ -408,7 +373,6 @@ class ConfirmationManager:
             point_id: The original confirmation point ID
             modified_proposal: The modified proposal content
             new_skills_referenced: Optional new skill references
-            new_code_preview: Optional new code preview
             
         Returns:
             The new UserConfirmationPoint, or None if original not found
@@ -421,7 +385,6 @@ class ConfirmationManager:
             stage=original.stage,
             proposal_content=modified_proposal,
             skills_referenced=new_skills_referenced or original.skills_referenced,
-            code_preview=new_code_preview or original.code_preview,
             expected_outcome=original.expected_outcome,
             timeout_seconds=original.timeout_seconds,
             metadata={
@@ -544,7 +507,6 @@ class ConfirmationPointBuilder:
                  .with_stage("data_cleaning")
                  .with_proposal("## Proposal\n...")
                  .with_skill("data-analysis", "/skills/data-analysis", "techniques.md")
-                 .with_code_preview("python", "import pandas as pd")
                  .with_expected_outcome("Clean dataset")
                  .with_timeout(300)
                  .build())
@@ -554,7 +516,6 @@ class ConfirmationPointBuilder:
         self._stage = ""
         self._proposal_content = ""
         self._skills_referenced: List[SkillReference] = []
-        self._code_preview: Optional[CodePreview] = None
         self._expected_outcome = ""
         self._timeout_seconds: Optional[float] = None
         self._metadata: Dict[str, Any] = {}
@@ -585,20 +546,6 @@ class ConfirmationPointBuilder:
         ))
         return self
 
-    def with_code_preview(
-        self,
-        language: str,
-        code: str,
-        file_name: Optional[str] = None
-    ) -> "ConfirmationPointBuilder":
-        """Set the code preview."""
-        self._code_preview = CodePreview(
-            language=language,
-            code=code,
-            file_name=file_name
-        )
-        return self
-
     def with_expected_outcome(self, outcome: str) -> "ConfirmationPointBuilder":
         """Set the expected outcome description."""
         self._expected_outcome = outcome
@@ -620,7 +567,6 @@ class ConfirmationPointBuilder:
             stage=self._stage,
             proposal_content=self._proposal_content,
             skills_referenced=self._skills_referenced,
-            code_preview=self._code_preview,
             expected_outcome=self._expected_outcome,
             timeout_seconds=self._timeout_seconds,
             metadata=self._metadata

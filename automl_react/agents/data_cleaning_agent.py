@@ -48,24 +48,23 @@ class DataCleaningAgent(ReActAgent):
 
     def get_system_prompt(self) -> str:
         """获取系统提示词"""
-        try:
-            return self.config_loader.get_prompt("data_cleaning", "system_prompt")
-        except KeyError:
-            return """你是一位专业的数据清洗专家。
+        return self.config_loader.get_prompt("data_cleaning", "system_prompt")
 
-你的职责：
-1. 分析数据质量问题（缺失值、异常值、重复值等）
-2. 生成数据清洗方案
-3. 编写清洗代码
-4. 执行清洗并验证结果
+    def _get_cleaning_skill_content(self) -> str:
+        """获取数据清洗阶段使用的 skill 参考内容。"""
+        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
+        pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
 
-**重要原则**：
-- 必须使用用户上传的实际数据文件进行分析和清洗
-- 禁止使用示例数据或虚构数据
-- 所有分析结果必须基于实际数据的统计信息
-- 清洗代码必须针对实际数据的列名和特征
+        parts = []
+        if techniques:
+            parts.append(f"### 数据清洗技术参考\n\n{techniques[:1500]}")
+        if pitfalls:
+            parts.append(f"### 数据陷阱参考\n\n{pitfalls[:1500]}")
 
-请基于数据分析和最佳实践，生成详细的清洗方案。"""
+        if not parts:
+            return ""
+
+        return "⚠️ 注意：以下内容为技术参考，包含示例数据，仅供参考方法\n\n" + "\n\n".join(parts) + "\n\n⚠️ 技术参考结束\n"
 
     def analyze_data(self, data_path: str) -> Dict[str, Any]:
         """
@@ -83,10 +82,12 @@ class DataCleaningAgent(ReActAgent):
         pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
 
         # 构建分析提示词
-        user_input = f"请分析数据文件: {data_path}"
-
-        if pitfalls:
-            user_input += f"\n\n参考以下数据陷阱指南:\n{pitfalls[:2000]}"
+        prompt_template = self.config_loader.get_prompt("data_cleaning", "data_analysis_prompt")
+        pitfalls_content = f"参考以下数据陷阱指南:\n{pitfalls[:2000]}" if pitfalls else ""
+        user_input = prompt_template.format(
+            data_path=data_path,
+            pitfalls_content=pitfalls_content,
+        )
 
         result = self.run(user_input, stage="data_analysis")
 
@@ -299,59 +300,19 @@ class DataCleaningAgent(ReActAgent):
                 raise ValueError(f"数据质量分析失败: {quality_result.get('error')}")
             print(f"[DataCleaningAgent] 数据质量分析完成")
 
-        # 使用数据质量报告作为数据摘要
-        data_summary = self._generate_quality_report(task_description)
+        # 使用数据质量报告作为方案输入上下文
+        quality_report = self._generate_quality_report(task_description)
         
         # 打印数据质量报告摘要
-        print(f"[DataCleaningAgent] 数据质量报告生成完成，长度: {len(data_summary)} 字符")
+        print(f"[DataCleaningAgent] 数据质量报告生成完成，长度: {len(quality_report)} 字符")
         print(f"[DataCleaningAgent] 数据形状: {self.data_info['shape']}")
         print(f"[DataCleaningAgent] 缺失值列数: {len(self.data_info['missing_analysis'])}")
-        print(f"[DataCleaningAgent] 数据质量报告预览:\n{data_summary[:500]}...")
+        print(f"[DataCleaningAgent] 数据质量报告预览:\n{quality_report[:500]}...")
 
-        # 加载 data-cleaning skill
-        techniques = self.skill_loader.get_skill_reference("data-cleaning-1.0.0", "techniques.md")
-        pitfalls = self.skill_loader.get_skill_reference("data-cleaning-1.0.0", "pitfalls.md")
-
+        # 加载数据分析 skill，作为数据清洗阶段的方法参考
         # 从配置加载 Prompt
-        try:
-            prompt_template = self.config_loader.get_prompt("data_cleaning", "plan_generation")
-        except KeyError:
-            prompt_template = """你是一位数据清洗专家。
-
-================================================================================
-📊 以下是用户上传的**实际数据**的质量分析报告（必须基于此生成方案）
-================================================================================
-
-{task_context}{data_summary}
-
-================================================================================
-📚 以下是数据清洗的技术参考（仅供参考，其中的示例数据不可用于方案）
-================================================================================
-
-{skill_content}
-
-================================================================================
-
-**🔴 极其重要的指示**：
-1. **你必须基于上面的「实际数据质量分析报告」生成清洗方案**
-2. **数据文件路径为: {data_path}**
-3. **实际数据形状是 {shape}**
-4. **上面的「技术参考」部分包含的是示例数据，仅供参考方法，不可用于方案**
-5. **清洗方案中的所有列名必须与「实际数据质量分析报告」中的列名一致**
-6. **禁止使用技术参考中的示例数据列名（如 sepal length、iris 等）**
-
-请生成 Markdown 格式的清洗方案，方案必须基于「实际数据质量分析报告」。
-"""
-
-        # 构建 skill 内容（添加明显的边界标志）
-        skill_content = ""
-        if techniques or pitfalls:
-            skill_content += "⚠️ 注意：以下内容为技术参考，包含示例数据，仅供参考方法\n\n"
-            if techniques:
-                skill_content += f"### 数据清洗技术参考\n\n{techniques[:1500]}\n\n"
-            if pitfalls:
-                skill_content += f"### 数据陷阱参考\n\n{pitfalls[:1500]}\n\n"
-            skill_content += "⚠️ 技术参考结束\n"
+        prompt_template = self.config_loader.get_prompt("data_cleaning", "plan_generation")
+        skill_content = self._get_cleaning_skill_content()
 
         # 添加用户的建模背景
         task_context = ""
@@ -364,10 +325,11 @@ class DataCleaningAgent(ReActAgent):
 **重要：请在清洗方案中充分考虑用户的建模背景和要求。**
 
 """
+        self.task_context = task_context
 
         user_input = prompt_template.format(
             data_path=path,
-            data_summary=data_summary,
+            quality_report=quality_report,
             skill_content=skill_content,
             task_context=task_context,
             shape=self.data_info['shape']
@@ -391,9 +353,6 @@ class DataCleaningAgent(ReActAgent):
         if not self.cleaning_plan:
             raise ValueError("请先生成清洗方案")
 
-        # 生成代码预览
-        code_preview = self._generate_code_preview()
-
         # 参考的 skills
         skills_referenced = [
             {
@@ -406,31 +365,8 @@ class DataCleaningAgent(ReActAgent):
         raise ConfirmationRequired(
             stage="data_cleaning",
             proposal=self.cleaning_plan,
-            code_preview=code_preview,
             skills_referenced=skills_referenced
         )
-
-    def _generate_code_preview(self) -> str:
-        """生成代码预览"""
-        if not self.cleaning_plan:
-            return "# 代码将在确认后生成"
-
-        # 从配置加载 Prompt
-        try:
-            prompt_template = self.config_loader.get_prompt("data_cleaning", "code_generation")
-        except KeyError:
-            prompt_template = """基于以下清洗方案，生成 Python 代码预览：
-
-{plan}
-
-请生成简洁的代码预览（仅展示主要步骤）。
-"""
-
-        user_input = prompt_template.format(plan=self.cleaning_plan[:1000])
-
-        result = self.run(user_input, stage="data_cleaning_code_preview")
-
-        return result.get("answer", "# 代码预览")
 
     def generate_cleaning_code(self, modifications: str = None) -> str:
         """
@@ -468,31 +404,21 @@ class DataCleaningAgent(ReActAgent):
 """
 
         self.cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
+        skill_content = self._get_cleaning_skill_content()
         
-        task_prompt = f"""基于以下清洗方案，生成简洁的 Python 代码：
-
-数据路径: {self.data_path}
-{data_info_text}
-
-清洗方案:
-{self.cleaning_plan}
-
-{modifications_text}
-
-要求：
-1. 使用 pandas 进行数据处理
-2. 保存清洗后的数据到指定路径: {self.cleaned_data_path}
-3. 只做数据清洗，不生成其他特征
-4. 返回清洗结果统计
-5. 代码必须完整可执行，包含所有必要的导入语句
-6. 必须使用上述实际数据的列名，不要使用示例数据
-7. 必须在代码中包含明确的数据保存语句，并将结果保存到: {self.cleaned_data_path}
-
-请生成完整的、可执行的 Python 代码。
-"""
+        prompt_template = self.config_loader.get_prompt("data_cleaning", "code_generation_full")
+        task_prompt = prompt_template.format(
+            data_path=self.data_path,
+            plan=self.cleaning_plan,
+            skill_content=skill_content,
+            modifications=modifications_text,
+            data_info_text=data_info_text,
+            cleaned_data_path=self.cleaned_data_path,
+            task_context=getattr(self, 'task_context', ''),
+        )
 
         # 使用 CodeActAgent 生成并执行代码
-        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300)
+        codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300, session_id=self.session_id)
 
         # 准备执行上下文
         context = {
@@ -508,6 +434,7 @@ class DataCleaningAgent(ReActAgent):
             required_filepath=self.cleaned_data_path,
             output_validator=self._validate_cleaned_output,
             deterministic_fallback=self._deterministic_cleaning_fallback,
+            stage="data_cleaning_code_generation",
         )
 
         if result.success:
@@ -640,7 +567,7 @@ except Exception as _fallback_error:
         # 使用 CodeActAgent 执行代码
         from ..utils.codeact_agent import CodeActAgent
         
-        codeact = CodeActAgent(llm=self.llm, max_iterations=1, timeout=300)
+        codeact = CodeActAgent(llm=self.llm, max_iterations=1, timeout=300, session_id=self.session_id)
         
         context = {
             "data_path": self.data_path,

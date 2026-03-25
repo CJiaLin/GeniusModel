@@ -25,3 +25,7 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated assets and logs
+assets/
+logs/

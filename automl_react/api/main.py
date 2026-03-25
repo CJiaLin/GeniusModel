@@ -376,15 +376,11 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
             else:
                 print(f"[API] 使用清洗后的数据: {cleaned_data_path}")
             
-            # 读取清洗报告
-            cleaning_report = asset_manager.read_asset("cleaning", "cleaning_plan.md")
-            
             result = agent.explore(
                 cleaned_data_path,
                 target_column=target_column,
                 task_type=task_type,
-                task_description=task_description,
-                cleaning_report=cleaning_report
+                task_description=task_description
             )
             print(f"[API] explore 返回结果: success={result.get('success')}, answer长度={len(result.get('answer', ''))}")
             
@@ -507,8 +503,6 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 asset_manager = get_asset_manager(session_id=session_id)
                 # 读取探索性分析报告（新流程：exploration 目录）
                 exploration_result = asset_manager.read_asset("exploration", "data_exploration_result.md")
-                cleaning_result = asset_manager.read_asset("cleaning", "cleaning_plan.md")
-                
                 # 读取清洗后的数据路径
                 import json
                 cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
@@ -527,7 +521,6 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     target_column, 
                     task_type,
                     analysis_result=exploration_result,  # 使用探索性分析报告
-                    cleaning_result=None,
                     cleaned_data_path=cleaned_data_path,
                     task_description=task_description
                 )
@@ -542,7 +535,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                         "stage": "feature_engineering",
                         "data_path": data_path,
                         "has_exploration_input": exploration_result is not None,
-                        "has_cleaning_input": cleaning_result is not None,
+                        "has_cleaned_data_input": cleaned_data_path is not None,
                         "timestamp": datetime.now().isoformat()
                     }
                 )
@@ -578,9 +571,8 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 
                 # 读取所有前一阶段的结果
                 asset_manager = get_asset_manager(session_id=session_id)
-                analysis_result = asset_manager.read_asset("analysis", "data_analysis_result.md")
-                cleaning_result = asset_manager.read_asset("cleaning", "cleaning_plan.md")
-                feature_result = asset_manager.read_asset("features", "feature_engineering_plan.md")
+                exploration_result = asset_manager.read_asset("exploration", "data_exploration_result.md")
+                feature_metrics_report = asset_manager.read_asset("features", "feature_metrics_report.md")
                 
                 # 读取特征工程后的数据路径
                 import json
@@ -599,9 +591,8 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     data_path, 
                     target_column, 
                     task_type,
-                    analysis_result=analysis_result,
-                    cleaning_result=cleaning_result,
-                    feature_result=feature_result,
+                    exploration_report=exploration_result,
+                    feature_metrics_report=feature_metrics_report,
                     features_data_path=features_data_path,
                     task_description=task_description
                 )
@@ -615,9 +606,9 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     metadata={
                         "stage": "model_training",
                         "data_path": data_path,
-                        "has_analysis_input": analysis_result is not None,
-                        "has_cleaning_input": cleaning_result is not None,
-                        "has_feature_input": feature_result is not None,
+                        "has_exploration_input": exploration_result is not None,
+                        "has_feature_metrics_input": feature_metrics_report is not None,
+                        "features_data_path": features_data_path,
                         "timestamp": datetime.now().isoformat()
                     }
                 )
@@ -926,7 +917,6 @@ async def execute_feature_evaluation(session: Dict, modifications: Optional[str]
         "success": result.get("success", False),
         "metrics_result_path": result.get("metrics_result_path"),
         "metrics_report_path": result.get("metrics_report_path"),
-        "feature_reliability_report_path": result.get("feature_reliability_report_path"),
         "features_data_path": result.get("features_data_path"),
         "timestamp": result.get("timestamp", datetime.now().isoformat()),
         "stage": "feature_evaluation"
@@ -950,13 +940,36 @@ async def execute_model_training(
     modifications: Optional[str] = None
 ) -> Dict:
     """执行模型训练"""
+    import json
+
     agent = session["agents"].get("model")
     if not agent:
         raise ValueError("模型训练 Agent 不存在")
 
+    asset_manager = get_asset_manager(session_id=session.get("session_id", "default"))
+
+    feature_result_json = asset_manager.read_asset("features", "feature_engineering_result.json")
+    features_data_path = None
+    if feature_result_json:
+        try:
+            feature_data = json.loads(feature_result_json)
+            features_data_path = feature_data.get("features_data_path")
+        except Exception:
+            features_data_path = None
+
+    exploration_report = asset_manager.read_asset("exploration", "data_exploration_result.md")
+    feature_metrics_report = asset_manager.read_asset("features", "feature_metrics_report.md")
+
     # 先生成建模方案（如果还没有）
     if not agent.model_plan:
-        agent.generate_model_plan(data_path, target_column, task_type)
+        agent.generate_model_plan(
+            data_path,
+            target_column,
+            task_type,
+            exploration_report=exploration_report,
+            feature_metrics_report=feature_metrics_report,
+            features_data_path=features_data_path
+        )
 
     # 生成训练代码并执行
     code = agent.generate_model_code(modifications)
@@ -968,13 +981,18 @@ async def execute_model_training(
     execution_result = {
         "success": result.get("success", False),
         "model_path": result.get("model_path"),
+        "train_split_path": result.get("train_split_path"),
+        "test_split_path": result.get("test_split_path"),
+        "training_summary_path": result.get("training_summary_path"),
         "metrics": result.get("metrics", {}),
+        "selected_feature_names": result.get("selected_feature_names", []),
+        "features_data_path": result.get("data_path"),
+        "artifact_status": result.get("artifact_status", {}),
         "timestamp": result.get("timestamp"),
         "stage": "model_training"
     }
 
     # 保存结果到资产（用于报告生成）
-    asset_manager = get_asset_manager(session_id=session.get("session_id", "default"))
     asset_manager.save_data(
         data=json.dumps(execution_result, ensure_ascii=False, indent=2),
         filename="model_training_result.json",

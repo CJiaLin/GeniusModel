@@ -13,8 +13,13 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from datetime import datetime
 
 import pandas as pd
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+
+from ..config import get_config_loader
+from ..logger import get_llm_logger
 
 
 @dataclass
@@ -37,10 +42,13 @@ class CodeActAgent:
     通过迭代的方式生成、执行、观察、修正代码。
     """
     
-    def __init__(self, llm: Any = None, max_iterations: int = 5, timeout: int = 300):
+    def __init__(self, llm: Any = None, max_iterations: int = 5, timeout: int = 300, session_id: str = None):
         self.llm = llm
         self.max_iterations = max_iterations
         self.timeout = timeout
+        self.session_id = session_id or "default"
+        self.config_loader = get_config_loader()
+        self.llm_logger = get_llm_logger(session_id=self.session_id)
     
     def generate_and_execute(
         self,
@@ -51,6 +59,7 @@ class CodeActAgent:
         output_validator: Optional[Callable[[str, Dict[str, Any]], Tuple[bool, str]]] = None,
         deterministic_fallback: Optional[Callable[[Dict[str, Any], str], Tuple[bool, str]]] = None,
         syntax_check: bool = True,
+        stage: str = "",
     ) -> CodeActResult:
         """
         生成并执行代码（CodeAct 模式）
@@ -78,14 +87,14 @@ class CodeActAgent:
             
             # 构建提示词
             if iteration == 0:
-                prompt = self._build_initial_prompt(task_prompt)
+                prompt = self._build_initial_messages(task_prompt)
             else:
                 print(last_error)
-                prompt = self._build_retry_prompt(task_prompt, current_code, last_error)
+                prompt = self._build_retry_messages(task_prompt, current_code, last_error)
             
             # 生成代码
             print(f"[CodeAct] 生成代码...")
-            code_result = self._generate_code(prompt)
+            code_result = self._generate_code(prompt, stage=stage, iteration=iteration + 1)
             
             if not code_result["success"]:
                 last_error = code_result.get("error", "代码生成失败")
@@ -210,52 +219,95 @@ class CodeActAgent:
         except Exception as e:
             return False, f"输出文件格式错误: {e}"
     
-    def _build_initial_prompt(self, task_prompt: str) -> str:
-        """构建初始提示词"""
-        return f"""{task_prompt}
+    def _build_initial_messages(self, task_prompt: str) -> List[BaseMessage]:
+        """构建首轮代码生成消息。"""
+        system_content = """你是一位专业的 Python 工程师。
 
-请生成完整的、可执行的 Python 代码来完成任务。
+你的职责：
+1. 根据用户任务生成完整、可执行的 Python 代码
+2. 严格使用用户提供的真实数据路径、真实字段和真实约束
+3. 输出的代码必须可以直接运行，且包含所有必要导入
 
-要求：
-1. 分析问题并确定需要编写什么代码
-2. 编写能解决问题的Python代码
-3. 代码必须完整、可执行
-4. 包含所有必要的 import 语句
-5. 使用绝对路径处理文件
-6. 确保所有括号、引号正确闭合
-7. 在代码末尾输出执行结果
+代码生成要求：
+1. 代码必须完整、可执行
+2. 使用绝对路径处理文件
+3. 确保所有括号、引号正确闭合
+4. 在代码末尾输出执行结果
+5. 只输出 Python 代码块，用 ```python 和 ``` 包围"""
 
-直接输出 Python 代码，用 ```python 和 ``` 包围。"""
-    
-    def _build_retry_prompt(self, task_prompt: str, code: str, error: str) -> str:
-        """构建重试提示词"""
-        return f"""{task_prompt}
+        human_content = f"""## 当前任务
 
-上次生成的代码执行失败，请修复问题。
+{task_prompt}"""
 
-## 上次生成的代码：
-```python
-{code}
-```
+        return [
+            SystemMessage(content=system_content),
+            HumanMessage(content=human_content),
+        ]
 
-## 执行错误：
-{error}
+    def _build_retry_messages(self, task_prompt: str, code: str, error: str) -> List[BaseMessage]:
+        """构建重试代码生成消息。"""
+        system_content = """你是一位专业的 Python 工程师。
 
-请分析错误原因，修复代码中的问题，重新生成完整的、可执行的 Python 代码。
+你的职责：
+1. 修复上一轮生成代码中的问题
+2. 严格保留用户任务中的真实数据路径、字段和输出要求
+3. 重新输出完整、可执行的 Python 代码
 
-要求：
+修复要求：
 1. 仔细检查代码语法
 2. 确保所有导入的库都已导入
 3. 确保文件路径正确
 4. 确保变量名一致
 5. 处理可能的异常情况
+6. 只输出 Python 代码块，用 ```python 和 ``` 包围"""
 
-直接输出修复后的 Python 代码，用 ```python 和 ``` 包围。"""
-    
-    def _generate_code(self, prompt: str) -> Dict[str, Any]:
+        human_content = f"""## 原始任务
+
+{task_prompt}
+
+## 上次生成的代码
+
+```python
+{code}
+```
+
+## 执行错误
+
+{error}
+
+请分析错误原因并重新生成修复后的完整代码。"""
+
+        return [
+            SystemMessage(content=system_content),
+            HumanMessage(content=human_content),
+        ]
+
+    def _serialize_llm_input(self, llm_input: Any) -> str:
+        """将最终发送给 LLM 的输入序列化为可审阅文本。"""
+        if isinstance(llm_input, str):
+            return llm_input
+
+        if isinstance(llm_input, list):
+            lines = ["## Final Chat Messages", ""]
+            for index, message in enumerate(llm_input, start=1):
+                role = getattr(message, "type", message.__class__.__name__).replace("Message", "").lower()
+                content = getattr(message, "content", str(message))
+                lines.extend([
+                    f"### Message {index}",
+                    f"- Role: {role}",
+                    "",
+                    str(content).strip(),
+                    "",
+                ])
+            return "\n".join(lines).strip()
+
+        return str(llm_input)
+
+    def _generate_code(self, prompt: Any, stage: str = "", iteration: int = 1) -> Dict[str, Any]:
         """生成代码"""
         try:
             full_response = ""
+            start_time = datetime.now()
             
             # 尝试流式输出
             try:
@@ -274,6 +326,25 @@ class CodeActAgent:
                     return {"success": False, "error": str(e2)}
             
             print()  # 换行
+
+            llm_config = self.config_loader.get_llm_config()
+            model_name = llm_config.get("model_name", "unknown")
+            provider = llm_config.get("provider", "unknown")
+            latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            self.llm_logger.log_call(
+                model_name=model_name,
+                provider=provider,
+                input_content=self._serialize_llm_input(prompt),
+                output_content=full_response,
+                latency_ms=latency_ms,
+                stage=stage,
+                metadata={
+                    "call_type": "codeact",
+                    "prompt_scope": "final_actual_llm_input",
+                    "prompt_format": "chat_messages_system_user",
+                    "iteration": iteration,
+                }
+            )
             
             # 提取代码
             code = self._extract_code(full_response)
