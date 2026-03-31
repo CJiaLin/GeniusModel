@@ -19,6 +19,9 @@ class WorkflowStage(Enum):
     Represents the different stages of the AutoML workflow pipeline.
     """
     DATA_UPLOAD = "data_upload"
+    PROBLEM_DEFINITION = "problem_definition"
+    DATA_CONTRACT_CHECK = "data_contract_check"
+    DATA_SPLITTING = "data_splitting"
     DATA_CLEANING = "data_cleaning"  # 包含数据质量分析
     DATA_EXPLORATION = "data_exploration"  # 探索性数据分析（基于清洗后数据）
     FEATURE_ENGINEERING = "feature_engineering"
@@ -34,6 +37,21 @@ class WorkflowStage(Enum):
 # Define valid stage transitions
 VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
     WorkflowStage.DATA_UPLOAD: [
+        WorkflowStage.PROBLEM_DEFINITION,
+        WorkflowStage.DATA_CLEANING,
+        WorkflowStage.ERROR,
+    ],
+    WorkflowStage.PROBLEM_DEFINITION: [
+        WorkflowStage.DATA_CONTRACT_CHECK,
+        WorkflowStage.DATA_CLEANING,
+        WorkflowStage.ERROR,
+    ],
+    WorkflowStage.DATA_CONTRACT_CHECK: [
+        WorkflowStage.DATA_SPLITTING,
+        WorkflowStage.DATA_CLEANING,
+        WorkflowStage.ERROR,
+    ],
+    WorkflowStage.DATA_SPLITTING: [
         WorkflowStage.DATA_CLEANING,
         WorkflowStage.ERROR,
     ],
@@ -61,6 +79,9 @@ VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
     WorkflowStage.COMPLETED: [],
     WorkflowStage.ERROR: [
         WorkflowStage.DATA_UPLOAD,
+        WorkflowStage.PROBLEM_DEFINITION,
+        WorkflowStage.DATA_CONTRACT_CHECK,
+        WorkflowStage.DATA_SPLITTING,
         WorkflowStage.DATA_CLEANING,
         WorkflowStage.DATA_EXPLORATION,
         WorkflowStage.FEATURE_ENGINEERING,

@@ -115,16 +115,27 @@ class ConfigLoader:
         """
         prompts = self.load_prompts()
 
-        if section not in prompts:
+        section_aliases = {
+            "data_analysis": "problem_definition",
+        }
+        key_aliases = {
+            ("data_cleaning", "quality_analysis_prompt"): "quality_analysis_prompt",
+            ("data_cleaning", "data_analysis_prompt"): "quality_analysis_prompt",
+        }
+
+        resolved_section = section_aliases.get(section, section)
+        resolved_key = key_aliases.get((section, key), key)
+
+        if resolved_section not in prompts:
             raise KeyError(f"Prompt section '{section}' 不存在")
 
         if key is None:
-            return prompts[section]
+            return prompts[resolved_section]
 
-        if key not in prompts[section]:
+        if resolved_key not in prompts[resolved_section]:
             raise KeyError(f"Prompt key '{key}' 在 section '{section}' 中不存在")
 
-        return prompts[section][key]
+        return prompts[resolved_section][resolved_key]
 
     def get_llm_config(self, model_name: str = None) -> Dict[str, Any]:
         """

@@ -59,8 +59,9 @@ class ModelTrainingAgent(ReActAgent):
         session_dir = self.asset_manager.session_dir
         return {
             "model_path": str(session_dir / "models" / "trained_model.pkl"),
-            "train_split_path": str(session_dir / "data" / "train_split.csv"),
-            "test_split_path": str(session_dir / "data" / "test_split.csv"),
+            "train_split_path": str(session_dir / "data" / "train_raw.csv"),
+            "valid_split_path": str(session_dir / "data" / "valid_raw.csv"),
+            "test_split_path": str(session_dir / "data" / "test_raw.csv"),
             "training_summary_path": str(session_dir / "models" / "training_summary.json")
         }
 
@@ -147,11 +148,21 @@ class ModelTrainingAgent(ReActAgent):
         artifact_paths = self._get_training_artifact_paths()
         artifact_status = {key: os.path.exists(path) for key, path in artifact_paths.items()}
         summary_payload = self._read_training_summary(artifact_paths["training_summary_path"])
+        valid_split_path = summary_payload.get("valid_split_path")
+        has_validation_split = bool(valid_split_path)
+        success = (
+            artifact_status["model_path"]
+            and artifact_status["train_split_path"]
+            and artifact_status["test_split_path"]
+            and artifact_status["training_summary_path"]
+            and (artifact_status["valid_split_path"] if has_validation_split else True)
+        )
 
         result_info = {
-            "success": all(artifact_status.values()),
+            "success": success,
             "model_path": artifact_paths["model_path"] if artifact_status["model_path"] else None,
             "train_split_path": artifact_paths["train_split_path"] if artifact_status["train_split_path"] else None,
+            "valid_split_path": valid_split_path if has_validation_split else None,
             "test_split_path": artifact_paths["test_split_path"] if artifact_status["test_split_path"] else None,
             "training_summary_path": artifact_paths["training_summary_path"] if artifact_status["training_summary_path"] else None,
             "data_path": self.data_path,
@@ -172,21 +183,31 @@ class ModelTrainingAgent(ReActAgent):
         import pandas as pd
 
         artifact_paths = self._get_training_artifact_paths()
-        missing_files = [path for path in artifact_paths.values() if not os.path.exists(path)]
+        required_paths = [
+            artifact_paths["model_path"],
+            artifact_paths["train_split_path"],
+            artifact_paths["test_split_path"],
+            artifact_paths["training_summary_path"],
+        ]
+        if context.get("valid_split_path"):
+            required_paths.append(artifact_paths["valid_split_path"])
+        missing_files = [path for path in required_paths if not os.path.exists(path)]
         if missing_files:
             return False, f"缺少训练产物: {missing_files}"
 
         try:
             train_df = pd.read_csv(artifact_paths["train_split_path"])
+            valid_df = pd.read_csv(artifact_paths["valid_split_path"]) if os.path.exists(artifact_paths["valid_split_path"]) else None
             test_df = pd.read_csv(artifact_paths["test_split_path"])
         except Exception as error:
             return False, f"训练/测试切分文件不可读: {error}"
 
-        if train_df.empty or test_df.empty:
-            return False, "训练集或测试集为空"
+        if train_df.empty or test_df.empty or (valid_df is not None and valid_df.empty):
+            return False, "训练集、验证集或测试集为空"
 
         target_column = context.get("target_column") or self.target_column
-        if target_column and (target_column not in train_df.columns or target_column not in test_df.columns):
+        valid_missing_target = valid_df is not None and target_column not in valid_df.columns
+        if target_column and (target_column not in train_df.columns or target_column not in test_df.columns or valid_missing_target):
             return False, f"切分文件中缺少目标列: {target_column}"
 
         summary_payload = self._read_training_summary(artifact_paths["training_summary_path"])
@@ -198,6 +219,7 @@ class ModelTrainingAgent(ReActAgent):
             "target_transform",
             "model_path",
             "train_split_path",
+            "valid_split_path",
             "test_split_path"
         ]
         missing_summary_keys = [key for key in required_summary_keys if key not in summary_payload]
@@ -216,67 +238,109 @@ class ModelTrainingAgent(ReActAgent):
             if required_key not in model_artifact:
                 return False, f"模型文件缺少字段: {required_key}"
 
-        return True, f"train={train_df.shape}, test={test_df.shape}, target={target_column}"
+        valid_shape = valid_df.shape if valid_df is not None else None
+        return True, f"train={train_df.shape}, valid={valid_shape}, test={test_df.shape}, target={target_column}"
 
     def _deterministic_model_training_fallback(self, context: Dict[str, Any], output_path: str) -> Tuple[bool, str]:
         """确定性兜底：使用简单 sklearn 基线模型完成训练并落盘。"""
         import pandas as pd
+        from sklearn.compose import ColumnTransformer
         from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
         from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
-        from sklearn.model_selection import train_test_split
+        from sklearn.impute import SimpleImputer
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import OneHotEncoder
 
         data_path = context.get("data_path") or self.data_path
         target_column = context.get("target_column") or self.target_column
         task_type = (context.get("task_type") or self.task_type or "classification").lower()
         artifact_paths = self._get_training_artifact_paths()
+        train_split_path = context.get("train_split_path") or artifact_paths["train_split_path"]
+        valid_split_path = context.get("valid_split_path") or artifact_paths["valid_split_path"]
+        test_split_path = context.get("test_split_path") or artifact_paths["test_split_path"]
 
         if not data_path or not target_column:
             return False, "缺少训练输入路径或目标列"
 
         try:
-            df = pd.read_csv(data_path)
+            train_df = pd.read_csv(train_split_path) if os.path.exists(train_split_path) else pd.read_csv(data_path)
+            valid_df = pd.read_csv(valid_split_path) if valid_split_path and os.path.exists(valid_split_path) else None
+            test_df = pd.read_csv(test_split_path) if test_split_path and os.path.exists(test_split_path) else None
         except Exception as error:
             return False, f"读取训练数据失败: {error}"
 
-        if target_column not in df.columns:
+        if target_column not in train_df.columns:
             return False, f"训练数据中不存在目标列: {target_column}"
 
-        df = df.dropna(subset=[target_column]).copy()
-        if df.empty:
+        train_df = train_df.dropna(subset=[target_column]).copy()
+        if valid_df is not None:
+            valid_df = valid_df.dropna(subset=[target_column]).copy()
+        if test_df is not None:
+            test_df = test_df.dropna(subset=[target_column]).copy()
+
+        if train_df.empty:
             return False, "去除目标列缺失后无可用样本"
+        if test_df is None or test_df.empty:
+            return False, "缺少可用的测试集资产"
 
-        train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
         x_train_raw = train_df.drop(columns=[target_column])
-        x_test_raw = test_df.drop(columns=[target_column])
+        evaluation_df = valid_df if valid_df is not None and not valid_df.empty else test_df
+        evaluation_split_name = "valid" if valid_df is not None and not valid_df.empty else "test"
+        x_valid_raw = evaluation_df.drop(columns=[target_column])
         y_train = train_df[target_column]
-        y_test = test_df[target_column]
+        y_valid = evaluation_df[target_column]
 
-        x_train = pd.get_dummies(x_train_raw, dummy_na=False)
-        x_test = pd.get_dummies(x_test_raw, dummy_na=False)
-        x_train, x_test = x_train.align(x_test, join="left", axis=1, fill_value=0)
+        numeric_features = list(x_train_raw.select_dtypes(include=["int64", "float64", "int32", "float32", "bool"]).columns)
+        categorical_features = [column for column in x_train_raw.columns if column not in numeric_features]
+
+        preprocessor = ColumnTransformer(
+            transformers=[
+                (
+                    "num",
+                    Pipeline([
+                        ("imputer", SimpleImputer(strategy="median")),
+                    ]),
+                    numeric_features,
+                ),
+                (
+                    "cat",
+                    Pipeline([
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+                    ]),
+                    categorical_features,
+                ),
+            ],
+            remainder="drop",
+        )
 
         if "regression" in task_type:
-            model = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
-            model.fit(x_train, y_train)
-            predictions = model.predict(x_test)
+            estimator = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+        else:
+            estimator = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+
+        model = Pipeline([
+            ("preprocessor", preprocessor),
+            ("model", estimator),
+        ])
+        model.fit(x_train_raw, y_train)
+        predictions = model.predict(x_valid_raw)
+
+        if "regression" in task_type:
             metrics = {
-                "r2": float(r2_score(y_test, predictions)),
-                "mae": float(mean_absolute_error(y_test, predictions)),
-                "rmse": float(mean_squared_error(y_test, predictions) ** 0.5)
+                "primary_metric": "rmse",
+                "r2": float(r2_score(y_valid, predictions)),
+                "mae": float(mean_absolute_error(y_valid, predictions)),
+                "rmse": float(mean_squared_error(y_valid, predictions) ** 0.5)
             }
         else:
-            model = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
-            model.fit(x_train, y_train)
-            predictions = model.predict(x_test)
             metrics = {
-                "accuracy": float(accuracy_score(y_test, predictions)),
-                "f1_weighted": float(f1_score(y_test, predictions, average="weighted"))
+                "primary_metric": "f1_weighted",
+                "accuracy": float(accuracy_score(y_valid, predictions)),
+                "f1_weighted": float(f1_score(y_valid, predictions, average="weighted"))
             }
 
-        selected_feature_names = list(x_train.columns)
-
-        train_df.to_csv(artifact_paths["train_split_path"], index=False)
-        test_df.to_csv(artifact_paths["test_split_path"], index=False)
+        selected_feature_names = list(x_train_raw.columns)
         packaged_artifact = {
             "model": model,
             "selected_feature_names": selected_feature_names,
@@ -296,15 +360,17 @@ class ModelTrainingAgent(ReActAgent):
             "target_transform": None,
             "data_path": data_path,
             "model_path": artifact_paths["model_path"],
-            "train_split_path": artifact_paths["train_split_path"],
-            "test_split_path": artifact_paths["test_split_path"],
+            "train_split_path": train_split_path,
+            "valid_split_path": valid_split_path if evaluation_split_name == "valid" else None,
+            "test_split_path": test_split_path,
+            "evaluation_split_name": evaluation_split_name,
             "timestamp": datetime.now().isoformat()
         }
 
         with open(artifact_paths["training_summary_path"], "w", encoding="utf-8") as file:
             json.dump(summary_payload, file, ensure_ascii=False, indent=2)
 
-        return True, f"确定性基线训练完成，模型已保存到 {output_path}"
+        return True, f"确定性基线训练完成，使用 {evaluation_split_name} 集做指标选择，模型已保存到 {output_path}"
 
     def get_system_prompt(self) -> str:
         """获取系统提示词"""
@@ -370,7 +436,10 @@ class ModelTrainingAgent(ReActAgent):
         feature_metrics_report: str = None,
         exploration_report: str = None,
         features_data_path: str = None,
-        task_description: str = ""
+        task_description: str = "",
+        train_split_path: str = None,
+        valid_split_path: str = None,
+        test_split_path: str = None,
     ) -> str:
         """
         生成建模方案
@@ -400,6 +469,9 @@ class ModelTrainingAgent(ReActAgent):
         self.task_type = task
 
         artifact_paths = self._get_training_artifact_paths()
+        self.train_split_path = train_split_path or getattr(self, "train_split_path", None) or artifact_paths["train_split_path"]
+        self.valid_split_path = valid_split_path or getattr(self, "valid_split_path", None) or artifact_paths["valid_split_path"]
+        self.test_split_path = test_split_path or getattr(self, "test_split_path", None) or artifact_paths["test_split_path"]
 
         task_context = ""
         
@@ -509,10 +581,12 @@ class ModelTrainingAgent(ReActAgent):
 - 预测目标变量: {target}
 - 应综合当前训练数据事实、探索性分析报告、特征分析报告决定最终建模策略
 - 默认应保留除目标列外的全部特征工程产物，仅排除明确常量列或确认泄露特征
-- 需要保留训练集文件: {artifact_paths['train_split_path']}
-- 需要保留测试集文件: {artifact_paths['test_split_path']}
+- 上游已提供训练集文件: {self.train_split_path}
+- 上游已提供验证集文件: {self.valid_split_path if self.valid_split_path else '无，当前数据量不足时可退化为 train/test'}
+- 上游已提供测试集文件: {self.test_split_path}
 - 需要保存训练好的模型文件: {artifact_paths['model_path']}
 - 需要保存训练摘要文件: {artifact_paths['training_summary_path']}
+- valid 只用于选方案与调参，test 只用于最终评估，不参与任何拟合和调参
 
 重要：请基于上述实际数据和前序阶段的分析结果生成建模方案，且所有字段、样本规模、目标变量判断都必须与当前读取到的数据一致。
 """
@@ -611,8 +685,9 @@ class ModelTrainingAgent(ReActAgent):
             plan=self.model_plan,
             skill_content=self._get_phase3_skill_content(),
             modifications=modifications_text,
-            train_split_path=artifact_paths["train_split_path"],
-            test_split_path=artifact_paths["test_split_path"],
+            train_split_path=self.train_split_path or artifact_paths["train_split_path"],
+            valid_split_path=self.valid_split_path or artifact_paths["valid_split_path"],
+            test_split_path=self.test_split_path or artifact_paths["test_split_path"],
             model_path=artifact_paths["model_path"],
             training_summary_path=artifact_paths["training_summary_path"],
             task_context=getattr(self, 'task_context', ''),
@@ -626,8 +701,9 @@ class ModelTrainingAgent(ReActAgent):
             "target_column": self.target_column,
             "task_type": self.task_type,
             "model_path": artifact_paths["model_path"],
-            "train_split_path": artifact_paths["train_split_path"],
-            "test_split_path": artifact_paths["test_split_path"],
+            "train_split_path": self.train_split_path or artifact_paths["train_split_path"],
+            "valid_split_path": self.valid_split_path or artifact_paths["valid_split_path"],
+            "test_split_path": self.test_split_path or artifact_paths["test_split_path"],
             "training_summary_path": artifact_paths["training_summary_path"]
         }
 
@@ -639,6 +715,7 @@ class ModelTrainingAgent(ReActAgent):
                 "selected_feature_names",
                 "model_path",
                 "train_split_path",
+                "valid_split_path",
                 "test_split_path",
                 "training_summary_path"
             ],
@@ -708,8 +785,9 @@ class ModelTrainingAgent(ReActAgent):
             "target_column": self.target_column,
             "task_type": self.task_type,
             "model_path": artifact_paths["model_path"],
-            "train_split_path": artifact_paths["train_split_path"],
-            "test_split_path": artifact_paths["test_split_path"],
+            "train_split_path": self.train_split_path or artifact_paths["train_split_path"],
+            "valid_split_path": self.valid_split_path or artifact_paths["valid_split_path"],
+            "test_split_path": self.test_split_path or artifact_paths["test_split_path"],
             "training_summary_path": artifact_paths["training_summary_path"]
         }
 

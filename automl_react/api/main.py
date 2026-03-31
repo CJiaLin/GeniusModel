@@ -23,9 +23,11 @@ from datetime import datetime
 
 from automl_react.agents import (
     DataCleaningAgent,
+    DataSplittingAgent,
     FeatureEngineeringAgent,
     ModelEvaluationAgent,
-    ModelTrainingAgent
+    ModelTrainingAgent,
+    run_dataset_split,
 )
 from automl_react.agents.data_analysis_agent import DataAnalysisAgent
 from automl_react.report import PipelineGenerator, ReportGenerator
@@ -108,9 +110,87 @@ def _ensure_session_data_path(session_id: str, source_data_path: Optional[str]) 
             print(f"[API] 初始数据已复制到: {session_data_path}")
 
     if session_data_path.exists():
+        _save_data_onboarding_artifacts(session_id, session_data_path, source_data_path)
         return str(session_data_path)
 
     return source_data_path
+
+
+def _save_data_onboarding_artifacts(
+    session_id: str,
+    session_data_path: Path,
+    original_source_path: str,
+) -> None:
+    """生成并持久化 schema 快照和上传元数据。"""
+    import hashlib
+    import pandas as pd
+
+    asset_manager = get_asset_manager(session_id=session_id)
+    metadata_path = asset_manager.session_dir / "data" / "data_metadata.json"
+    schema_path = asset_manager.session_dir / "data" / "schema_snapshot.json"
+
+    # 如果两个产物都已存在就跳过，避免重复覆盖
+    if metadata_path.exists() and schema_path.exists():
+        return
+
+    # ---- 上传元数据 ----
+    try:
+        file_size = session_data_path.stat().st_size
+        md5 = hashlib.md5()
+        with open(session_data_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(8192), b""):
+                md5.update(chunk)
+        checksum = md5.hexdigest()
+    except Exception:
+        file_size = -1
+        checksum = "unknown"
+
+    data_metadata = {
+        "session_id": session_id,
+        "upload_timestamp": datetime.now().isoformat(),
+        "original_source_path": str(original_source_path),
+        "asset_path": str(session_data_path),
+        "data_version": "1.0_original",
+        "file_size_bytes": file_size,
+        "checksum_md5": checksum,
+    }
+    asset_manager.save_data(
+        data=json.dumps(data_metadata, ensure_ascii=False, indent=2),
+        filename="data_metadata.json",
+        asset_type="data",
+    )
+    print(f"[API] 上传元数据已保存: data/data_metadata.json")
+
+    # ---- Schema 快照 ----
+    try:
+        df = pd.read_csv(session_data_path, nrows=0)  # 只读列名和类型
+        df_full = pd.read_csv(session_data_path)
+        schema_snapshot = {
+            "session_id": session_id,
+            "snapshot_timestamp": datetime.now().isoformat(),
+            "shape": [int(df_full.shape[0]), int(df_full.shape[1])],
+            "columns": list(df_full.columns),
+            "dtypes": {col: str(dtype) for col, dtype in df_full.dtypes.items()},
+            "missing_counts": {col: int(v) for col, v in df_full.isnull().sum().items()},
+            "missing_ratios": {col: round(float(v / len(df_full) * 100), 2) for col, v in df_full.isnull().sum().items()},
+            "numeric_columns": list(df_full.select_dtypes(include=["int64", "float64"]).columns),
+            "categorical_columns": list(df_full.select_dtypes(include=["object", "category", "bool"]).columns),
+            "duplicate_rows": int(df_full.duplicated().sum()),
+            "memory_bytes": int(df_full.memory_usage(deep=True).sum()),
+        }
+    except Exception as exc:
+        schema_snapshot = {
+            "session_id": session_id,
+            "snapshot_timestamp": datetime.now().isoformat(),
+            "error": str(exc),
+        }
+
+    asset_manager.save_data(
+        data=json.dumps(schema_snapshot, ensure_ascii=False, indent=2),
+        filename="schema_snapshot.json",
+        asset_type="data",
+    )
+    print(f"[API] Schema 快照已保存: data/schema_snapshot.json")
 
 
 def _normalize_workflow_data_path(session_id: str, workflow_state: Optional[WorkflowState]) -> None:
@@ -125,6 +205,146 @@ def _normalize_workflow_data_path(session_id: str, workflow_state: Optional[Work
         workflow_state.set_context("data_path", normalized_data_path)
         workflow_state.save()
         print(f"[API] 已统一 data_path 到资产路径: {normalized_data_path}")
+
+
+def _resolve_stage_alias(stage: str) -> str:
+    """兼容旧阶段命名。"""
+    if stage == "data_analysis":
+        return "problem_definition"
+    return stage
+
+
+def _get_problem_definition_payload(workflow_state: Optional[WorkflowState]) -> Dict[str, Any]:
+    """获取已确认的问题定义结构化结果。"""
+    if not workflow_state:
+        return {}
+    payload = workflow_state.get_context("problem_definition", {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _get_effective_target_column(workflow_state: Optional[WorkflowState]) -> Optional[str]:
+    """优先使用问题定义阶段确认后的目标列。"""
+    payload = _get_problem_definition_payload(workflow_state)
+    resolved_target = payload.get("target_column") or payload.get("prediction_target")
+    if isinstance(resolved_target, str) and resolved_target.strip():
+        return resolved_target.strip()
+    if workflow_state:
+        return workflow_state.get_context("target_column")
+    return None
+
+
+def _get_effective_task_type(workflow_state: Optional[WorkflowState]) -> Optional[str]:
+    """优先使用问题定义阶段确认后的任务类型。"""
+    payload = _get_problem_definition_payload(workflow_state)
+    resolved_task_type = payload.get("task_type")
+    if resolved_task_type in {"classification", "regression"}:
+        return resolved_task_type
+    if workflow_state:
+        return workflow_state.get_context("task_type")
+    return None
+
+
+def _get_split_payload(workflow_state: Optional[WorkflowState]) -> Dict[str, Any]:
+    """获取已确认的数据切分结果。"""
+    if not workflow_state:
+        return {}
+    payload = workflow_state.get_context("data_split", {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _get_train_raw_data_path(workflow_state: Optional[WorkflowState]) -> Optional[str]:
+    split_payload = _get_split_payload(workflow_state)
+    train_path = split_payload.get("train_raw_path") or split_payload.get("split_paths", {}).get("train_raw_path")
+    if train_path:
+        return train_path
+    if workflow_state:
+        return workflow_state.get_context("data_path")
+    return None
+
+
+def _get_valid_raw_data_path(workflow_state: Optional[WorkflowState]) -> Optional[str]:
+    split_payload = _get_split_payload(workflow_state)
+    return split_payload.get("valid_raw_path") or split_payload.get("split_paths", {}).get("valid_raw_path")
+
+
+def _get_test_raw_data_path(workflow_state: Optional[WorkflowState]) -> Optional[str]:
+    split_payload = _get_split_payload(workflow_state)
+    return split_payload.get("test_raw_path") or split_payload.get("split_paths", {}).get("test_raw_path")
+
+
+def _normalize_list(value: Any) -> List[str]:
+    """将问题定义中的条目统一转为字符串列表。"""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _compose_stage_task_description(workflow_state: Optional[WorkflowState]) -> str:
+    """将原始任务描述和已确认问题定义合并为后续阶段上下文。"""
+    if not workflow_state:
+        return ""
+
+    raw_description = workflow_state.get_context("task_description", "")
+    payload = _get_problem_definition_payload(workflow_state)
+    if not payload:
+        return raw_description
+
+    secondary_metrics = ", ".join(_normalize_list(payload.get("secondary_metrics"))) or "无"
+    business_constraints = "\n".join(f"- {item}" for item in _normalize_list(payload.get("business_constraints"))) or "- 无"
+    success_criteria = "\n".join(f"- {item}" for item in _normalize_list(payload.get("success_criteria"))) or "- 无"
+    assumptions = "\n".join(f"- {item}" for item in _normalize_list(payload.get("assumptions"))) or "- 无"
+    open_questions = "\n".join(f"- {item}" for item in _normalize_list(payload.get("open_questions"))) or "- 无"
+
+    sections = [
+        "## 已确认的问题定义",
+        "",
+        f"- 任务类型: {payload.get('task_type', '未确认')}",
+        f"- 目标列: {payload.get('target_column', workflow_state.get_context('target_column', '未确认'))}",
+        f"- 预测目标: {payload.get('prediction_target', '未确认')}",
+        f"- 预测时点: {payload.get('prediction_timing', '待确认')}",
+        f"- 主评估指标: {payload.get('primary_metric', '待确认')}",
+        f"- 辅助指标: {secondary_metrics}",
+        "",
+        "### 业务约束",
+        business_constraints,
+        "",
+        "### 成功标准",
+        success_criteria,
+        "",
+        "### 关键假设",
+        assumptions,
+        "",
+        "### 待确认问题",
+        open_questions,
+    ]
+
+    if raw_description:
+        sections.extend([
+            "",
+            "## 原始任务描述",
+            "",
+            raw_description,
+        ])
+
+    split_payload = _get_split_payload(workflow_state)
+    if split_payload:
+        split_paths = split_payload.get("split_paths", {})
+        sections.extend([
+            "",
+            "## 已确认的数据切分",
+            "",
+            f"- 切分策略: {split_payload.get('split_strategy', '未确认')}",
+            f"- train_raw: {split_paths.get('train_raw_path', '未生成')}",
+            f"- valid_raw: {split_paths.get('valid_raw_path', '未生成')}",
+            f"- test_raw: {split_paths.get('test_raw_path', '未生成')}",
+            "- 原则: valid 用于选方案，test 只用于最终评估，不参与任何拟合与调参。",
+        ])
+
+    return "\n".join(sections)
 
 
 def get_session(session_id: str) -> Dict[str, Any]:
@@ -283,6 +503,25 @@ async def start_workflow(request: StartWorkflowRequest):
     workflow_state.set_context("task_type", request.task_type)
     workflow_state.set_context("model", request.model)
     workflow_state.set_context("task_description", request.task_description)  # 保存用户的建模背景和要求
+
+    # 把上传元数据和 schema 快照写入 workflow context（路径 + 完整对象）
+    asset_manager = get_asset_manager(session_id=request.session_id)
+    _meta_path = asset_manager.session_dir / "data" / "data_metadata.json"
+    _schema_path = asset_manager.session_dir / "data" / "schema_snapshot.json"
+    if _meta_path.exists():
+        workflow_state.set_context("data_metadata_path", str(_meta_path))
+        try:
+            with open(_meta_path, "r", encoding="utf-8") as fh:
+                workflow_state.set_context("data_metadata", json.load(fh))
+        except Exception:
+            pass
+    if _schema_path.exists():
+        workflow_state.set_context("schema_snapshot_path", str(_schema_path))
+        try:
+            with open(_schema_path, "r", encoding="utf-8") as fh:
+                workflow_state.set_context("schema_snapshot", json.load(fh))
+        except Exception:
+            pass
     
     session["workflow_state"] = workflow_state
     session["confirmation_manager"] = ConfirmationManager()
@@ -307,7 +546,15 @@ async def start_workflow(request: StartWorkflowRequest):
         llm=llm,
         session_id=request.session_id
     )
+    session["agents"]["analysis"] = DataAnalysisAgent(
+        llm=llm,
+        session_id=request.session_id
+    )
     session["agents"]["cleaning"] = DataCleaningAgent(
+        llm=llm,
+        session_id=request.session_id
+    )
+    session["agents"]["splitting"] = DataSplittingAgent(
         llm=llm,
         session_id=request.session_id
     )
@@ -366,6 +613,9 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     if not workflow_state:
         raise HTTPException(status_code=404, detail="会话不存在")
     
+    requested_stage = stage
+    stage = _resolve_stage_alias(stage)
+
     # 更新工作流状态（如果当前阶段不是目标阶段）
     target_stage = WorkflowStage(stage)
     if workflow_state.current_stage != target_stage:
@@ -376,8 +626,8 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     
     # 获取上下文
     data_path = workflow_state.get_context("data_path")
-    target_column = workflow_state.get_context("target_column")
-    task_type = workflow_state.get_context("task_type")
+    target_column = _get_effective_target_column(workflow_state)
+    task_type = _get_effective_task_type(workflow_state)
     
     # 获取或创建确认管理器
     confirmation_manager = session.get("confirmation_manager")
@@ -388,14 +638,187 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
         print(f"[API] 已重新创建确认管理器")
     
     # 根据阶段执行相应操作
-    if stage == "data_exploration":
+    if stage == "problem_definition":
+        agent = session["agents"].get("analysis")
+        if not agent:
+            model = workflow_state.get_context("model", "kimi-k2.5")
+            llm = create_llm_client(model)
+            agent = DataAnalysisAgent(llm=llm, session_id=session_id)
+            session["agents"]["analysis"] = agent
+
+        try:
+            task_description = workflow_state.get_context("task_description", "")
+            print(f"[API] ========== 问题定义阶段开始 ==========")
+
+            result = agent.generate_problem_definition(
+                data_path=data_path,
+                target_column=workflow_state.get_context("target_column"),
+                task_type=workflow_state.get_context("task_type"),
+                task_description=task_description,
+            )
+            definition_payload = agent.get_problem_definition_payload()
+
+            confirmation_point = confirmation_manager.add_confirmation_point(
+                stage="problem_definition",
+                proposal_content=result,
+                metadata={
+                    "stage": "problem_definition",
+                    "target_column": workflow_state.get_context("target_column"),
+                    "task_type": workflow_state.get_context("task_type"),
+                    "problem_definition": definition_payload,
+                }
+            )
+
+            print(f"[API] ========== 问题定义阶段完成 ==========")
+            response_payload = {
+                "success": True,
+                "stage": stage,
+                "proposal": result,
+                "problem_definition": definition_payload,
+                "requires_confirmation": True,
+                "confirmation_id": confirmation_point.id,
+            }
+            if requested_stage == "data_analysis":
+                response_payload["analysis"] = result
+            return response_payload
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    elif stage == "data_contract_check":
+        try:
+            print(f"[API] ========== 数据契约检查阶段开始 ==========")
+            from automl_react.agents.data_contract_agent import run_data_contract_checks
+
+            problem_def = _get_problem_definition_payload(workflow_state)
+            contract_result = run_data_contract_checks(
+                data_path=data_path,
+                target_column=target_column or workflow_state.get_context("target_column", ""),
+                task_type=task_type or workflow_state.get_context("task_type", "regression"),
+                problem_definition=problem_def or None,
+            )
+
+            asset_manager = get_asset_manager(session_id=session_id)
+            asset_manager.save_data(
+                data=contract_result["summary"],
+                filename="data_contract_report.md",
+                asset_type="analysis",
+                metadata={"stage": "data_contract_check", "timestamp": datetime.now().isoformat()},
+            )
+            asset_manager.save_data(
+                data=json.dumps(contract_result, ensure_ascii=False, indent=2, default=str),
+                filename="data_contract_result.json",
+                asset_type="analysis",
+                metadata={"stage": "data_contract_check", "timestamp": datetime.now().isoformat()},
+            )
+
+            # 创建确认点，让用户审阅风险清单并决定是否继续
+            confirmation_point = confirmation_manager.add_confirmation_point(
+                stage="data_contract_check",
+                proposal_content=contract_result["summary"],
+                metadata={
+                    "stage": "data_contract_check",
+                    "modelable": contract_result["modelable"],
+                    "stats": contract_result["stats"],
+                },
+            )
+
+            print(f"[API] 契约检查结论: {'可建模' if contract_result['modelable'] else '不可建模'}")
+            print(f"[API] ========== 数据契约检查阶段完成 ==========")
+            return {
+                "success": True,
+                "stage": stage,
+                "modelable": contract_result["modelable"],
+                "proposal": contract_result["summary"],
+                "risk_list": contract_result["risk_list"],
+                "questions_for_business": contract_result["questions_for_business"],
+                "stats": contract_result["stats"],
+                "requires_confirmation": True,
+                "confirmation_id": confirmation_point.id,
+            }
+        except Exception as e:
+            import traceback
+            return {"success": False, "error": f"{e}\n{traceback.format_exc()}"}
+
+    elif stage == "data_splitting":
+        try:
+            print(f"[API] ========== 数据集切分阶段开始 ==========")
+            agent = session["agents"].get("splitting")
+            if not agent:
+                model = workflow_state.get_context("model", "kimi-k2.5")
+                llm = create_llm_client(model)
+                agent = DataSplittingAgent(llm=llm, session_id=session_id)
+                session["agents"]["splitting"] = agent
+            problem_def = _get_problem_definition_payload(workflow_state)
+            split_plan = agent.generate_split_plan(
+                data_path=data_path,
+                target_column=target_column or workflow_state.get_context("target_column", ""),
+                task_type=task_type or workflow_state.get_context("task_type", "classification"),
+                problem_definition=problem_def or None,
+                task_description=workflow_state.get_context("task_description", ""),
+            )
+
+            split_config = agent.split_config or {}
+            preview_result = run_dataset_split(
+                data_path=data_path,
+                target_column=target_column or workflow_state.get_context("target_column", ""),
+                task_type=task_type or workflow_state.get_context("task_type", "classification"),
+                problem_definition=problem_def or None,
+                output_dir=None,
+                config=split_config,
+            )
+
+            asset_manager = get_asset_manager(session_id=session_id)
+            asset_manager.save_data(
+                data=split_plan,
+                filename="dataset_split_report.md",
+                asset_type="analysis",
+                metadata={"stage": "data_splitting", "timestamp": datetime.now().isoformat()},
+            )
+            asset_manager.save_data(
+                data=json.dumps(preview_result, ensure_ascii=False, indent=2),
+                filename="dataset_split_result.json",
+                asset_type="analysis",
+                metadata={"stage": "data_splitting", "timestamp": datetime.now().isoformat()},
+            )
+
+            confirmation_point = confirmation_manager.add_confirmation_point(
+                stage="data_splitting",
+                proposal_content=split_plan,
+                metadata={
+                    "stage": "data_splitting",
+                    "split_strategy": preview_result["split_strategy"],
+                    "has_validation_split": preview_result["has_validation_split"],
+                    "counts": preview_result["counts"],
+                    "split_config": split_config,
+                },
+            )
+
+            print(f"[API] ========== 数据集切分阶段完成 ==========")
+            return {
+                "success": True,
+                "stage": stage,
+                "proposal": split_plan,
+                "split_strategy": preview_result["split_strategy"],
+                "counts": preview_result["counts"],
+                "has_validation_split": preview_result["has_validation_split"],
+                "questions_for_business": preview_result["questions_for_business"],
+                "warnings": preview_result["warnings"],
+                "split_config": split_config,
+                "requires_confirmation": True,
+                "confirmation_id": confirmation_point.id,
+            }
+        except Exception as e:
+            import traceback
+            return {"success": False, "error": f"{e}\n{traceback.format_exc()}"}
+
+    elif stage == "data_exploration":
         agent = session["agents"].get("exploration")
         if not agent:
             return {"success": False, "error": "DataExploration Agent 未初始化"}
         
         try:
             # 获取用户的建模背景和要求
-            task_description = workflow_state.get_context("task_description", "")
+            task_description = _compose_stage_task_description(workflow_state)
             
             print(f"[API] ========== 数据探索性分析阶段开始 ==========")
             
@@ -412,8 +835,8 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
             
             # 如果没有清洗后的数据，使用原始数据
             if not cleaned_data_path:
-                cleaned_data_path = data_path
-                print(f"[API] 使用原始数据: {cleaned_data_path}")
+                cleaned_data_path = _get_train_raw_data_path(workflow_state) or data_path
+                print(f"[API] 使用训练集原始数据: {cleaned_data_path}")
             else:
                 print(f"[API] 使用清洗后的数据: {cleaned_data_path}")
             
@@ -457,16 +880,17 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
         if agent:
             try:
                 print(f"[API] ========== 数据清洗阶段开始 ==========")
+                cleaning_input_path = _get_train_raw_data_path(workflow_state) or data_path
                 
                 # 获取用户的建模背景和要求
-                task_description = workflow_state.get_context("task_description", "")
+                task_description = _compose_stage_task_description(workflow_state)
                 if task_description:
                     print(f"[API] 用户建模背景: {task_description[:100]}...")
                 
                 # 数据清洗阶段自己进行数据质量分析
                 # 生成清洗方案（包含数据质量分析）
                 result = agent.generate_cleaning_plan(
-                    data_path, 
+                    cleaning_input_path,
                     task_description=task_description
                 )
                 print(f"[API] 清洗方案生成完成，长度: {len(result)} 字符")
@@ -479,7 +903,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     asset_type="cleaning",
                     metadata={
                         "stage": "data_cleaning",
-                        "data_path": data_path,
+                        "data_path": cleaning_input_path,
                         "timestamp": datetime.now().isoformat()
                     }
                 )
@@ -512,7 +936,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
             asset_manager = get_asset_manager(session_id=session_id)
             
             # 获取清洗后的数据路径
-            cleaned_data_path = data_path
+            cleaned_data_path = _get_train_raw_data_path(workflow_state) or data_path
             cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
             if cleaning_result_json:
                 try:
@@ -536,7 +960,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 print(f"[API] ========== 特征工程阶段开始 ==========")
                 
                 # 获取用户的建模背景和要求
-                task_description = workflow_state.get_context("task_description", "")
+                task_description = _compose_stage_task_description(workflow_state)
                 if task_description:
                     print(f"[API] 用户建模背景: {task_description[:100]}...")
                 
@@ -557,7 +981,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                         pass
                 
                 result = agent.generate_feature_plan(
-                    data_path, 
+                    _get_train_raw_data_path(workflow_state) or data_path,
                     target_column, 
                     task_type,
                     analysis_result=exploration_result,  # 使用探索性分析报告
@@ -573,7 +997,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     asset_type="features",
                     metadata={
                         "stage": "feature_engineering",
-                        "data_path": data_path,
+                        "data_path": cleaned_data_path or _get_train_raw_data_path(workflow_state) or data_path,
                         "has_exploration_input": exploration_result is not None,
                         "has_cleaned_data_input": cleaned_data_path is not None,
                         "timestamp": datetime.now().isoformat()
@@ -605,7 +1029,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 print(f"[API] ========== 模型训练阶段开始 ==========")
                 
                 # 获取用户的建模背景和要求
-                task_description = workflow_state.get_context("task_description", "")
+                task_description = _compose_stage_task_description(workflow_state)
                 if task_description:
                     print(f"[API] 用户建模背景: {task_description[:100]}...")
                 
@@ -627,13 +1051,16 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                         pass
                 
                 result = agent.generate_model_plan(
-                    data_path, 
+                    _get_train_raw_data_path(workflow_state) or data_path,
                     target_column, 
                     task_type,
                     exploration_report=exploration_result,
                     feature_metrics_report=feature_metrics_report,
                     features_data_path=features_data_path,
-                    task_description=task_description
+                    task_description=task_description,
+                    train_split_path=_get_train_raw_data_path(workflow_state),
+                    valid_split_path=_get_valid_raw_data_path(workflow_state),
+                    test_split_path=_get_test_raw_data_path(workflow_state),
                 )
                 print(f"[API] 模型训练方案生成完成，长度: {len(result)} 字符")
                 
@@ -644,7 +1071,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     asset_type="models",
                     metadata={
                         "stage": "model_training",
-                        "data_path": data_path,
+                        "data_path": features_data_path or _get_train_raw_data_path(workflow_state) or data_path,
                         "has_exploration_input": exploration_result is not None,
                         "has_feature_metrics_input": feature_metrics_report is not None,
                         "features_data_path": features_data_path,
@@ -685,7 +1112,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
             model_result_json = asset_manager.read_asset("models", "model_training_result.json")
             model_result = json.loads(model_result_json) if model_result_json else None
 
-            task_description = workflow_state.get_context("task_description", "")
+            task_description = _compose_stage_task_description(workflow_state)
             result = agent.generate_evaluation_plan(
                 target_column=target_column,
                 task_type=task_type,
@@ -762,8 +1189,8 @@ async def submit_confirmation(request: UserConfirmationRequest):
     
     stage = current_confirmation.stage
     data_path = workflow_state.get_context("data_path")
-    target_column = workflow_state.get_context("target_column")
-    task_type = workflow_state.get_context("task_type")
+    target_column = _get_effective_target_column(workflow_state)
+    task_type = _get_effective_task_type(workflow_state)
     
     # 执行结果
     execution_result = None
@@ -772,13 +1199,25 @@ async def submit_confirmation(request: UserConfirmationRequest):
     # 如果用户确认或修改，执行相应操作
     if status in [ConfirmationStatus.CONFIRMED, ConfirmationStatus.MODIFIED]:
         try:
-            if stage == "data_cleaning":
-                execution_result = await execute_data_cleaning(
+            if stage == "problem_definition":
+                execution_result = await execute_problem_definition(
                     session, data_path, request.modifications
+                )
+            elif stage == "data_contract_check":
+                execution_result = await execute_data_contract_check(
+                    session, data_path, request.modifications
+                )
+            elif stage == "data_splitting":
+                execution_result = await execute_data_splitting(
+                    session, data_path, request.modifications
+                )
+            elif stage == "data_cleaning":
+                execution_result = await execute_data_cleaning(
+                    session, _get_train_raw_data_path(workflow_state) or data_path, request.modifications
                 )
             elif stage == "feature_engineering":
                 execution_result = await execute_feature_engineering(
-                    session, data_path, target_column, task_type, request.modifications
+                    session, _get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, request.modifications
                 )
                 # 特征工程完成后，提示用户可选执行特征评估（非强制）
                 if execution_result.get("success"):
@@ -807,7 +1246,7 @@ async def submit_confirmation(request: UserConfirmationRequest):
                     )
             elif stage == "model_training":
                 execution_result = await execute_model_training(
-                    session, data_path, target_column, task_type, request.modifications
+                    session, _get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, request.modifications
                 )
             elif stage == "feature_evaluation":
                 execution_result = await execute_feature_evaluation(
@@ -933,6 +1372,208 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
     return execution_result
 
 
+async def execute_data_splitting(
+    session: Dict,
+    data_path: str,
+    modifications: Optional[str] = None,
+) -> Dict:
+    """根据用户确认后的方案生成切分代码并执行。"""
+    session_id = session.get("session_id", "default")
+    workflow_state = session.get("workflow_state")
+    asset_manager = get_asset_manager(session_id=session_id)
+    agent = session["agents"].get("splitting")
+
+    if not agent:
+        model = workflow_state.get_context("model", "kimi-k2.5") if workflow_state else "kimi-k2.5"
+        llm = create_llm_client(model)
+        agent = DataSplittingAgent(llm=llm, session_id=session_id)
+        session["agents"]["splitting"] = agent
+
+    target_column = _get_effective_target_column(workflow_state) or workflow_state.get_context("target_column")
+    task_type = _get_effective_task_type(workflow_state) or workflow_state.get_context("task_type", "classification")
+    problem_def = _get_problem_definition_payload(workflow_state)
+
+    if not agent.split_plan:
+        agent.generate_split_plan(
+            data_path=data_path,
+            target_column=target_column,
+            task_type=task_type,
+            problem_definition=problem_def or None,
+            task_description=workflow_state.get_context("task_description", "") if workflow_state else "",
+        )
+
+    code = agent.generate_split_code(modifications)
+    split_result = agent.execute_split(code)
+
+    split_paths = split_result.get("split_paths", {})
+    asset_manager.save_data(
+        data=split_result.get("summary", ""),
+        filename="dataset_split_report.md",
+        asset_type="analysis",
+        metadata={"stage": "data_splitting", "timestamp": datetime.now().isoformat()},
+    )
+    asset_manager.save_data(
+        data=json.dumps(split_result, ensure_ascii=False, indent=2),
+        filename="dataset_split_result.json",
+        asset_type="analysis",
+        metadata={"stage": "data_splitting", "timestamp": datetime.now().isoformat()},
+    )
+
+    if workflow_state:
+        workflow_state.set_context("data_split", split_result)
+        workflow_state.set_context("train_raw_path", split_paths.get("train_raw_path"))
+        workflow_state.set_context("valid_raw_path", split_paths.get("valid_raw_path"))
+        workflow_state.set_context("test_raw_path", split_paths.get("test_raw_path"))
+        workflow_state.set_context("split_strategy", split_result.get("split_strategy"))
+        workflow_state.set_context("split_config", split_result.get("config", agent.split_config or {}))
+        workflow_state.save()
+
+    return {
+        "success": True,
+        "stage": "data_splitting",
+        "split_strategy": split_result.get("split_strategy"),
+        "has_validation_split": split_result.get("has_validation_split"),
+        "counts": split_result.get("counts", {}),
+        "execution_mode": split_result.get("execution_mode"),
+        "train_raw_path": split_paths.get("train_raw_path"),
+        "valid_raw_path": split_paths.get("valid_raw_path"),
+        "test_raw_path": split_paths.get("test_raw_path"),
+    }
+
+
+async def execute_problem_definition(
+    session: Dict,
+    data_path: str,
+    modifications: Optional[str] = None,
+) -> Dict:
+    """固化用户确认后的问题定义结果。"""
+    session_id = session.get("session_id", "default")
+    workflow_state = session.get("workflow_state")
+    asset_manager = get_asset_manager(session_id=session_id)
+
+    agent = session["agents"].get("analysis")
+    if not agent:
+        raise ValueError("问题定义 Agent 不存在")
+
+    original_task_description = workflow_state.get_context("task_description", "") if workflow_state else ""
+    generation_task_description = original_task_description
+    if modifications:
+        generation_task_description = (
+            f"{original_task_description}\n\n## 用户确认补充\n\n{modifications}"
+            if original_task_description else modifications
+        )
+
+    if modifications or not getattr(agent, "problem_definition_plan", None):
+        agent.generate_problem_definition(
+            data_path=data_path,
+            target_column=workflow_state.get_context("target_column") if workflow_state else None,
+            task_type=workflow_state.get_context("task_type") if workflow_state else None,
+            task_description=generation_task_description,
+        )
+
+    payload = dict(agent.get_problem_definition_payload())
+    if modifications:
+        payload["user_confirmed_modifications"] = modifications
+
+    report_text = agent.problem_definition_plan or ""
+    report_asset = asset_manager.save_data(
+        data=report_text,
+        filename="problem_definition.md",
+        asset_type="analysis",
+        metadata={
+            "stage": "problem_definition",
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+    json_asset = asset_manager.save_data(
+        data=json.dumps(payload, ensure_ascii=False, indent=2),
+        filename="problem_definition.json",
+        asset_type="analysis",
+        metadata={
+            "stage": "problem_definition",
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+
+    if workflow_state:
+        workflow_state.update_context({
+            "problem_definition": payload,
+            "problem_definition_report": report_text,
+            "problem_definition_path": report_asset.path,
+            "problem_definition_json_path": json_asset.path,
+            "primary_metric": payload.get("primary_metric"),
+            "prediction_timing": payload.get("prediction_timing"),
+            "business_constraints": _normalize_list(payload.get("business_constraints")),
+            "success_criteria": _normalize_list(payload.get("success_criteria")),
+        })
+        workflow_state.save()
+
+    return {
+        "success": True,
+        "stage": "problem_definition",
+        "problem_definition_path": report_asset.path,
+        "problem_definition_json_path": json_asset.path,
+        "problem_definition": payload,
+    }
+
+
+async def execute_data_contract_check(
+    session: Dict,
+    data_path: str,
+    modifications: Optional[str] = None,
+) -> Dict:
+    """固化用户确认后的数据契约检查结果到 workflow context。"""
+    session_id = session.get("session_id", "default")
+    workflow_state = session.get("workflow_state")
+    asset_manager = get_asset_manager(session_id=session_id)
+
+    # 读取已经生成的契约检查结果
+    contract_json = asset_manager.read_asset("analysis", "data_contract_result.json")
+    if contract_json:
+        contract_result = json.loads(contract_json)
+    else:
+        # 如果用户修改后重新检查
+        from automl_react.agents.data_contract_agent import run_data_contract_checks
+        target_column = _get_effective_target_column(workflow_state)
+        task_type = _get_effective_task_type(workflow_state)
+        problem_def = _get_problem_definition_payload(workflow_state)
+        contract_result = run_data_contract_checks(
+            data_path=data_path,
+            target_column=target_column or "",
+            task_type=task_type or "regression",
+            problem_definition=problem_def or None,
+        )
+        asset_manager.save_data(
+            data=contract_result["summary"],
+            filename="data_contract_report.md",
+            asset_type="analysis",
+            metadata={"stage": "data_contract_check", "timestamp": datetime.now().isoformat()},
+        )
+        asset_manager.save_data(
+            data=json.dumps(contract_result, ensure_ascii=False, indent=2, default=str),
+            filename="data_contract_result.json",
+            asset_type="analysis",
+            metadata={"stage": "data_contract_check", "timestamp": datetime.now().isoformat()},
+        )
+
+    if workflow_state:
+        workflow_state.update_context({
+            "data_contract_modelable": contract_result.get("modelable", True),
+            "data_contract_risk_list": contract_result.get("risk_list", []),
+            "data_contract_questions": contract_result.get("questions_for_business", []),
+        })
+        if modifications:
+            workflow_state.set_context("data_contract_user_notes", modifications)
+        workflow_state.save()
+
+    return {
+        "success": True,
+        "stage": "data_contract_check",
+        "modelable": contract_result.get("modelable", True),
+        "risk_count": len(contract_result.get("risk_list", [])),
+    }
+
+
 async def execute_feature_engineering(
     session: Dict,
     data_path: str,
@@ -1045,6 +1686,8 @@ async def execute_model_training(
     """执行模型训练"""
     import json
 
+    workflow_state = session.get("workflow_state")
+
     agent = session["agents"].get("model")
     if not agent:
         raise ValueError("模型训练 Agent 不存在")
@@ -1071,8 +1714,15 @@ async def execute_model_training(
             task_type,
             exploration_report=exploration_report,
             feature_metrics_report=feature_metrics_report,
-            features_data_path=features_data_path
+            features_data_path=features_data_path,
+            train_split_path=workflow_state.get_context("train_raw_path") if workflow_state else None,
+            valid_split_path=workflow_state.get_context("valid_raw_path") if workflow_state else None,
+            test_split_path=workflow_state.get_context("test_raw_path") if workflow_state else None,
         )
+    elif workflow_state:
+        agent.train_split_path = workflow_state.get_context("train_raw_path")
+        agent.valid_split_path = workflow_state.get_context("valid_raw_path")
+        agent.test_split_path = workflow_state.get_context("test_raw_path")
 
     # 生成训练代码并执行
     code = agent.generate_model_code(modifications)
@@ -1085,6 +1735,7 @@ async def execute_model_training(
         "success": result.get("success", False),
         "model_path": result.get("model_path"),
         "train_split_path": result.get("train_split_path"),
+        "valid_split_path": result.get("valid_split_path"),
         "test_split_path": result.get("test_split_path"),
         "training_summary_path": result.get("training_summary_path"),
         "metrics": result.get("metrics", {}),
@@ -1310,8 +1961,8 @@ async def generate_report(session_id: str):
     
     # 获取上下文
     data_path = workflow_state.get_context("data_path")
-    target_column = workflow_state.get_context("target_column")
-    task_type = workflow_state.get_context("task_type")
+    target_column = _get_effective_target_column(workflow_state)
+    task_type = _get_effective_task_type(workflow_state)
     
     # 生成报告
     report_generator = ReportGenerator(session_id=session_id)
@@ -1349,8 +2000,8 @@ async def generate_pipeline(session_id: str):
     
     # 获取上下文
     data_path = workflow_state.get_context("data_path")
-    target_column = workflow_state.get_context("target_column")
-    task_type = workflow_state.get_context("task_type")
+    target_column = _get_effective_target_column(workflow_state)
+    task_type = _get_effective_task_type(workflow_state)
     
     # 生成脚本
     pipeline_generator = PipelineGenerator(session_id=session_id)

@@ -36,6 +36,16 @@ data_cleaning:
     4. **上面的「技术参考」部分包含的是示例数据，仅供参考方法，不可用于方案**
     5. **清洗方案中的所有列名必须与「实际数据质量分析报告」中的列名一致**
     6. **禁止使用技术参考中的示例数据列名（如 sepal length、iris 等）**
+    7. **在这一阶段禁止使用需要训练拟合的清洗方法（如 KNN 填充、基于模型的异常值检测等），如果数据质量问题较复杂，可以在方案中明确指出需要在特征工程阶段或模型训练阶段进行进一步处理**
+    8. **确保生成的代码对于增量数据也具有可执行性和鲁棒性，不要假设数据规模或分布不变**
+
+    请至少包含以下内容：
+    1. 数据质量问题概述
+    2. 针对每个问题的清洗策略
+    3. 清洗后数据的预期变化
+    4. 清洗方法与后续特征工程/建模阶段的衔接说明
+
+    **请务必基于上述「实际数据质量分析报告」中的数据事实生成清洗方案，禁止使用任何示例数据或与当前数据不一致的字段名。**
 
     请生成 Markdown 格式的清洗方案，方案必须基于「实际数据质量分析报告」。
 
@@ -46,13 +56,13 @@ data_cleaning:
     {skill_content}
 
   code_generation_full: |
-    {task_context}基于以下清洗方案，生成完整的 Python 代码：
-
+    建模任务内容：
+    {task_context}
+    
     数据路径: {data_path}
+    数据信息: {data_info_text}
 
-    {data_info_text}
-
-    清洗方案:
+    基于以下清洗方案，生成完整的 Python 代码：
     {plan}
 
     {modifications}
@@ -67,18 +77,25 @@ data_cleaning:
     5. 代码必须完整可执行，包含所有必要的导入语句
     6. 必须使用上述实际数据的列名，不要使用示例数据
     7. 必须在代码中包含明确的数据保存语句，并将结果保存到: {cleaned_data_path}
+    7. **在这一阶段禁止使用需要训练拟合的清洗方法（如 KNN 填充、基于模型的异常值检测等），如果数据质量问题较复杂，可以在方案中明确指出需要在特征工程阶段或模型训练阶段进行进一步处理**
+    8. **确保生成的代码对于增量数据也具有可执行性和鲁棒性，不要假设数据规模或分布不变**
 
     请生成完整的、可执行的 Python 代码。
 
     技术参考：
     {skill_content}
 
-  data_analysis_prompt: |
+  quality_analysis_prompt: |
     请分析数据文件: {data_path}
 
     {pitfalls_content}
 
     请基于当前实际数据识别主要数据质量问题。
+    请生成 Markdown 格式的数据质量分析报告，至少包含：
+    1. 数据质量问题概述
+    2. 每个问题涉及的字段和统计信息
+    3. 可能的清洗方法和注意事项
+    4. 需要在后续阶段进一步处理的复杂问题说明
 
 # 数据探索性分析 Agent 的 Prompts
 data_exploration:
@@ -445,24 +462,26 @@ model_training:
     1. 可使用任意主流机器学习库进行建模（如 scikit-learn、XGBoost、LightGBM、CatBoost 等），根据数据特点和任务需求选择最合适的算法
     2. 必须读取并使用的数据文件只有: {data_path}
     3. 必须根据建模方案中确认的目标变量与入模特征进行训练，不能自行改用其他字段。默认使用数据中除目标列外的所有特征，仅排除方案中明确列出的排除项（如方差为0的常量列、确认的数据泄露特征），不要自行额外过滤特征
-    4. 包含数据划分、模型训练、评估
-    5. 将包含目标列的训练集保存到: {train_split_path}
-    6. 将包含目标列的测试集保存到: {test_split_path}
-    7. 保存训练好的模型到: {model_path}
-    8. 保存训练摘要 JSON 到: {training_summary_path}
-    9. 训练摘要至少包含 metrics、selected_feature_names、target_column、task_type、target_transform、model_path、train_split_path、test_split_path
-    10. 代码中必须定义以下变量，供系统回收执行结果：metrics、selected_feature_names、model_path、train_split_path、test_split_path、training_summary_path
-    11. 包含详细的注释
-    12. 代码必须完整可执行，包含所有必要的导入语句
-    13. 必须使用上述实际数据的列名
-    14. 将训练摘要写入 JSON 文件，且其中必须包含 metrics、selected_feature_names、target_column、task_type、target_transform、model_path、train_split_path、test_split_path
-    15. 代码必须先读取 {data_path}，再基于实际列名动态构建训练输入；不要手工硬编码一个狭窄的特征白名单，除非这些排除项已经在建模方案中被明确批准
-    16. 如果数据中仍然包含分类特征，必须采用稳健、可执行的处理方式（如 ColumnTransformer + OneHotEncoder、CatBoost 原生类别处理、或其它可复现方案），不能假设所有特征都已经是纯数值
-    17. 如果决定对目标变量做变换（如 log1p），必须在代码中显式写出训练时的变换逻辑和预测后的逆变换逻辑，并保证 train/test split 保存的是原始业务尺度下的目标列
-    18. 如果进行多模型对比，必须基于与任务类型一致的主验证指标选择最佳模型，且最终保存的模型必须与 training_summary 中记录的最佳模型一致
-    19. selected_feature_names 必须反映最终实际送入模型训练的特征名，而不是计划里臆造的一组字段
-    20. 如果代码检测到方案中声明要排除的特征在当前数据中不存在，应安全跳过，不得报错；如果目标列不存在，则必须明确抛错
-    21. 保存到 {model_path} 的模型文件必须是统一打包结构，而不是裸模型对象。至少包含以下键：model、selected_feature_names、target_transform、preprocessor；如果没有独立预处理器，preprocessor 也必须显式写为 None
+    4. 必须消费上游已提供的数据切分资产，不得重新对整表做 train/test 切分
+    5. 训练输入资产路径: {train_split_path}
+    6. 验证输入资产路径: {valid_split_path}
+    7. 测试输入资产路径: {test_split_path}
+    8. 保存训练好的模型到: {model_path}
+    9. 保存训练摘要 JSON 到: {training_summary_path}
+    10. 训练摘要至少包含 metrics、selected_feature_names、target_column、task_type、target_transform、model_path、train_split_path、valid_split_path、test_split_path
+    11. 代码中必须定义以下变量，供系统回收执行结果：metrics、selected_feature_names、model_path、train_split_path、valid_split_path、test_split_path、training_summary_path
+    12. 包含详细的注释
+    13. 代码必须完整可执行，包含所有必要的导入语句
+    14. 必须使用上述实际数据的列名
+    15. 将训练摘要写入 JSON 文件，且其中必须包含 metrics、selected_feature_names、target_column、task_type、target_transform、model_path、train_split_path、valid_split_path、test_split_path
+    16. 代码必须先读取 {data_path}，再基于实际列名动态构建训练输入；不要手工硬编码一个狭窄的特征白名单，除非这些排除项已经在建模方案中被明确批准
+    17. 如果数据中仍然包含分类特征，必须采用稳健、可执行的处理方式（如 ColumnTransformer + OneHotEncoder、CatBoost 原生类别处理、或其它可复现方案），不能假设所有特征都已经是纯数值
+    18. 如果决定对目标变量做变换（如 log1p），必须在代码中显式写出训练时的变换逻辑和预测后的逆变换逻辑，并保证 split 资产中的目标列保持原始业务尺度
+    19. 如果进行多模型对比，必须基于与任务类型一致的主验证指标选择最佳模型，且最终保存的模型必须与 training_summary 中记录的最佳模型一致
+    20. selected_feature_names 必须反映最终实际送入模型训练的特征名，而不是计划里臆造的一组字段
+    21. 如果代码检测到方案中声明要排除的特征在当前数据中不存在，应安全跳过，不得报错；如果目标列不存在，则必须明确抛错
+    22. 保存到 {model_path} 的模型文件必须是统一打包结构，而不是裸模型对象。至少包含以下键：model、selected_feature_names、target_transform、preprocessor；如果没有独立预处理器，preprocessor 也必须显式写为 None
+    23. valid 只用于模型选择与调参，test 只用于最终评估；test 不得参与任何拟合和调参
 
     **额外硬约束**：
     1. 除非建模方案明确写出要排除的字段，否则不要做人工特征筛选。
@@ -529,25 +548,67 @@ model_evaluation:
     技术参考：
     {skill_content}
 
-# 数据分析 Agent 的 Prompts
-data_analysis:
+# 问题定义 Agent 的 Prompts
+data_splitting:
   system_prompt: |
-    你是一位专业的数据分析专家，专门帮助用户进行数据分析和质量评估。
+    你是一位专业的数据集切分专家，负责在数据清洗前设计可审阅、可修改、可执行的数据集切分方案。
 
     你的职责：
-    1. 加载和分析数据
-    2. 评估数据质量（缺失值、异常值、重复值等）
-    3. 生成详细的分析报告
-    4. 引导用户进行下一步工作流程
+    1. 结合任务类型、目标列和数据事实，推荐 train/valid/test 三份数据集的比例
+    2. 根据问题场景选择合适的切分方法，例如随机切分、分层切分、时间顺序切分、分组切分
+    3. 明确说明切分方案的理由、风险和需要用户确认的事项
+    4. 输出的是“方案”，不是执行代码
+
+    **重要原则**：
+    - test 集只用于最终评估，不能参与特征选择、调参或模型选择
+    - valid 集用于方案比较、模型选择和调参
+    - 必须优先避免数据泄漏
+    - 如果是时间序列任务，必须优先考虑按时间顺序切分
+    - 如果存在同实体多条记录，应优先考虑分组切分
+    - 输出必须支持用户后续修改比例、方法和关键字段
+
+  plan_generation: |
+    请基于以下上下文生成“数据集切分方案”，供用户确认和修改。
+    {task_context}
+    
+    {problem_context}
+    
+    {current_data_context}
+
+    ## 默认建议配置
+
+    ```json
+    {suggested_config_json}
+    ```
+
+    输出要求：
+    1. 给出推荐的 train/valid/test 比例。
+    2. 给出推荐的切分方法，并解释为什么适合当前场景。
+    3. 明确是否依赖时间字段、分组字段或目标分层。
+    4. 列出主要风险，例如类别不平衡、样本过少、时间泄漏、实体泄漏。
+    5. 列出用户可以修改的关键参数。
+    6. 最后给出“建议确认项”，便于用户直接反馈修改。
+
+    请使用 Markdown 输出，结构清晰，便于直接展示给用户确认。
+
+problem_definition:
+  system_prompt: |
+    你是一位专业的机器学习问题定义与数据分析专家，专门帮助用户澄清建模目标、评估口径和业务边界。
+
+    你的职责：
+    1. 基于用户任务描述和真实数据字段，明确机器学习问题定义
+    2. 识别预测目标、预测时点、评价指标、业务约束、成功标准和关键假设
+    3. 必要时补充数据质量与字段层面的事实核对
+    4. 生成可供后续清洗、探索、特征、训练阶段复用的问题定义文档
 
     **重要：标准工作流程顺序**
-    数据分析 → 数据清洗 → 特征工程 → 模型训练
+    问题定义 → 数据契约检查 → 数据集切分 → 数据清洗 → 数据探索 → 特征工程 → 模型训练 → 模型评估
 
     工作原则：
-    - 仔细分析数据质量和分布
-    - 分析完成后，应引导用户进行数据清洗
-    - 提供清晰的执行步骤和结果解释
-    - 生成 Markdown 格式的分析报告
+    - 先明确问题，再讨论建模方案
+    - 不能臆造业务约束；没有证据时要明确标记为假设或待确认问题
+    - 输出必须同时服务于业务沟通和后续工程执行
+    - 生成 Markdown 报告，并附带结构化 JSON 结果
 
     你可以使用以下工具来完成任务：
     - load_data: 加载数据文件
@@ -568,6 +629,48 @@ data_analysis:
     5. 下一步建议：引导进行数据清洗
 
     重要：分析完成后，必须明确指出下一步应该进行数据清洗。
+
+    技术参考：
+    {skill_content}
+
+  problem_definition_prompt: |
+    请先完成“问题定义”，而不是直接进入建模方案。
+
+    {task_context}{current_data_context}
+
+    ## 已知候选信息
+
+    - 候选目标列: {candidate_target_column}
+    - 候选任务类型: {candidate_task_type}
+
+    你的任务是基于用户任务描述和真实数据字段，输出一份可执行的问题定义文档，至少明确以下内容：
+    1. 任务类型
+    2. 预测目标
+    3. 预测时点
+    4. 主评估指标与辅助指标
+    5. 业务约束
+    6. 成功标准
+    7. 关键假设
+    8. 当前仍待确认的问题
+    9. 对下一阶段数据清洗的输入要求
+
+    **严格约束**：
+    1. 必须优先采用用户任务描述中的明确要求；若与候选目标列或候选任务类型冲突，必须在文档中点明冲突。
+    2. 如果任务描述没有明确“预测时点”或“成功标准”，必须写成“待确认”，并解释其对后续建模的影响。
+    3. 评价指标必须尽量使用业务任务中已经给出的口径，不可擅自替换。
+    4. 业务约束和成功标准要尽量具体，不能只写“效果要好”“模型要稳定”这类空话。
+    5. 最后一部分必须给出“下一步建议”，明确后续数据清洗需要遵守的边界。
+
+    **输出格式硬约束**：
+    1. 先输出 Markdown 文档，包含以下章节：
+       - 问题定义结论
+       - 任务边界与假设
+       - 评估口径
+       - 风险与待确认问题
+       - 下一步建议
+    2. 在 Markdown 末尾追加一个 ```json 代码块，字段必须符合以下 schema，且必须是合法 JSON：
+
+    {output_schema_json}
 
     技术参考：
     {skill_content}

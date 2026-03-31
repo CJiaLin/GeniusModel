@@ -12,6 +12,11 @@ stages:
   data_upload:
     required: true
     description: "数据上传阶段"
+
+  data_splitting:
+    required: true
+    description: "数据集切分阶段（在清洗前固化 train/valid/test 原始资产）"
+    confirmation_required: true
   
   data_cleaning:
     required: true

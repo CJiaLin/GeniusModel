@@ -82,7 +82,7 @@ class DataCleaningAgent(ReActAgent):
         pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
 
         # 构建分析提示词
-        prompt_template = self.config_loader.get_prompt("data_cleaning", "data_analysis_prompt")
+        prompt_template = self.config_loader.get_prompt("data_cleaning", "quality_analysis_prompt")
         pitfalls_content = f"参考以下数据陷阱指南:\n{pitfalls[:2000]}" if pitfalls else ""
         user_input = prompt_template.format(
             data_path=data_path,

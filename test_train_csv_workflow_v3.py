@@ -150,8 +150,8 @@ def test_start_workflow():
 
 
 def test_data_cleaning_stage():
-    """步骤 2: 数据清洗阶段 - 生成方案并执行"""
-    print_step(2, "数据清洗阶段 (生成方案 + 确认执行)")
+    """步骤 5: 数据清洗阶段 - 生成方案并执行"""
+    print_step(5, "数据清洗阶段 (生成方案 + 确认执行)")
     
     # 第一步：生成方案
     url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/data_cleaning/run"
@@ -187,8 +187,8 @@ def test_data_cleaning_stage():
 
 
 def test_data_exploration_stage():
-    """步骤 3: 数据探索性分析阶段"""
-    print_step(3, "数据探索性分析阶段")
+    """步骤 6: 数据探索性分析阶段"""
+    print_step(6, "数据探索性分析阶段")
 
     url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/data_exploration/run"
 
@@ -212,8 +212,8 @@ def test_data_exploration_stage():
 
 
 def test_feature_engineering_stage():
-    """步骤 4: 特征工程阶段 - 生成方案并执行"""
-    print_step(4, "特征工程阶段 (生成方案 + 确认执行)")
+    """步骤 7: 特征工程阶段 - 生成方案并执行"""
+    print_step(7, "特征工程阶段 (生成方案 + 确认执行)")
     
     url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/feature_engineering/run"
     
@@ -294,8 +294,8 @@ def test_submit_confirmation_and_execute(confirmation_id, status="confirmed", mo
 
 
 def test_model_training_stage():
-    """步骤 5: 模型训练阶段 - 生成方案并执行"""
-    print_step(5, "模型训练阶段 (生成方案 + 确认执行)")
+    """步骤 8: 模型训练阶段 - 生成方案并执行"""
+    print_step(8, "模型训练阶段 (生成方案 + 确认执行)")
 
     # 第一步：生成方案
     url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/model_training/run"
@@ -360,8 +360,8 @@ def test_model_training_stage():
 
 
 def test_model_evaluation_stage():
-    """步骤 6: 模型评估阶段 - 生成方案并确认执行"""
-    print_step(6, "模型评估阶段")
+    """步骤 9: 模型评估阶段 - 生成方案并确认执行"""
+    print_step(9, "模型评估阶段")
 
     url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/model_evaluation/run"
     response = post_with_progress(url, json_body={}, timeout=300, label="执行模型评估")
@@ -414,8 +414,8 @@ def test_model_evaluation_stage():
 
 
 def test_list_assets():
-    """步骤 7: 列出所有资产"""
-    print_step(7, "列出所有生成的资产")
+    """步骤 10: 列出所有资产"""
+    print_step(10, "列出所有生成的资产")
     
     url = f"{BASE_URL}/assets/{SESSION_ID}/list"
     
@@ -432,6 +432,32 @@ def test_list_assets():
             for f in files[:5]:
                 print(f"     * {f.get('name')} ({f.get('size', 0)} bytes)")
         print(f"   总计: {total_files} 个文件")
+
+        analysis_files = [f.get('name') for f in assets.get('analysis', [])]
+        required_analysis = {
+            "problem_definition.md",
+            "problem_definition.json",
+            "data_contract_report.md",
+            "data_contract_result.json",
+            "dataset_split_report.md",
+            "dataset_split_result.json",
+        }
+        missing = [x for x in required_analysis if x not in analysis_files]
+        if missing:
+            print(f"❌ 缺少关键问题定义产物: {missing}")
+            return False
+        print("✅ 问题定义产物校验通过")
+
+        data_files = [f.get('name') for f in assets.get('data', [])]
+        required_data_files = {"original_data.csv", "train_raw.csv", "test_raw.csv"}
+        missing = [x for x in required_data_files if x not in data_files]
+        if missing:
+            print(f"❌ 缺少关键数据切分产物: {missing}")
+            return False
+        if "valid_raw.csv" in data_files:
+            print("✅ 数据切分产物校验通过")
+        else:
+            print("⚠️ 当前会话未生成 valid_raw.csv，按最小 train/test 资源模式处理")
 
         # 关键产物校验 - 特征工程
         features_files = [f.get('name') for f in assets.get('features', [])]
@@ -494,6 +520,195 @@ def test_list_assets():
         return False
 
 
+def test_problem_definition_stage():
+    """步骤 2: 问题定义阶段 - 生成方案并确认固化"""
+    print_step(2, "问题定义阶段 (生成方案 + 确认固化)")
+
+    url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/problem_definition/run"
+
+    response = post_with_progress(url, json_body={}, timeout=300, label="生成问题定义方案")
+
+    if response.status_code != 200:
+        print(f"❌ 问题定义失败: {response.status_code} - {response.text}")
+        return False
+
+    result = response.json()
+    if not result.get("success"):
+        print(f"❌ 问题定义方案生成失败: {result.get('error', '未知错误')}")
+        return False
+
+    print("✅ 问题定义方案生成成功")
+    print(f"   - 方案长度: {len(result.get('proposal', ''))} 字符")
+
+    definition = result.get("problem_definition", {})
+    required_fields = {
+        "task_type",
+        "target_column",
+        "prediction_target",
+        "prediction_timing",
+        "primary_metric",
+        "business_constraints",
+        "success_criteria",
+    }
+    missing_fields = [name for name in required_fields if name not in definition]
+    if missing_fields:
+        print(f"❌ 问题定义缺少关键字段: {missing_fields}")
+        return False
+
+    if not result.get("requires_confirmation"):
+        print("❌ 问题定义阶段未返回 requires_confirmation，流程异常")
+        return False
+
+    exec_result = test_submit_confirmation_and_execute(
+        result.get("confirmation_id"),
+        "confirmed"
+    )
+    if not exec_result:
+        print("❌ 问题定义确认执行失败")
+        return False
+
+    execution = exec_result.get("execution", {})
+    if not execution.get("success"):
+        print(f"❌ 问题定义固化失败: {execution}")
+        return False
+
+    print("✅ 问题定义已确认并固化")
+    print(f"   - 报告路径: {execution.get('problem_definition_path')}")
+    print(f"   - JSON 路径: {execution.get('problem_definition_json_path')}")
+    return True
+
+
+def test_data_contract_check_stage():
+    """步骤 3: 数据契约检查 - 确认可建模性"""
+    print_step(3, "数据契约检查 (可建模性审查 + 确认)")
+
+    url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/data_contract_check/run"
+
+    response = post_with_progress(url, json_body={}, timeout=60, label="执行数据契约检查")
+
+    if response.status_code != 200:
+        print(f"❌ 数据契约检查失败: {response.status_code} - {response.text}")
+        return False
+
+    result = response.json()
+    if not result.get("success"):
+        print(f"❌ 数据契约检查失败: {result.get('error', '未知错误')}")
+        return False
+
+    modelable = result.get("modelable")
+    stats = result.get("stats", {})
+    risk_list = result.get("risk_list", [])
+    questions = result.get("questions_for_business", [])
+
+    print(f"✅ 数据契约检查完成")
+    print(f"   - 结论: {'可建模' if modelable else '不可建模'}")
+    print(f"   - 阻断项: {stats.get('n_blockers', 0)}")
+    print(f"   - 警告项: {stats.get('n_warnings', 0)}")
+    print(f"   - 风险数: {len(risk_list)}")
+    print(f"   - 待确认问题数: {len(questions)}")
+
+    if not modelable:
+        print("   ⚠️ 数据不可建模，但仍继续测试流程")
+
+    if not result.get("requires_confirmation"):
+        print("❌ 数据契约检查未返回 requires_confirmation")
+        return False
+
+    exec_result = test_submit_confirmation_and_execute(
+        result.get("confirmation_id"),
+        "confirmed"
+    )
+    if not exec_result:
+        print("❌ 数据契约检查确认失败")
+        return False
+
+    execution = exec_result.get("execution", {})
+    if not execution.get("success"):
+        print(f"❌ 数据契约检查固化失败: {execution}")
+        return False
+
+    print("✅ 数据契约检查已确认")
+    return True
+
+
+def test_data_splitting_stage():
+    """步骤 4: 数据集切分 - 在清洗前固化 train/valid/test"""
+    print_step(4, "数据集切分阶段 (生成方案 + 确认固化)")
+
+    url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/data_splitting/run"
+
+    response = post_with_progress(url, json_body={}, timeout=120, label="执行数据集切分")
+
+    if response.status_code != 200:
+        print(f"❌ 数据集切分失败: {response.status_code} - {response.text}")
+        return False
+
+    result = response.json()
+    if not result.get("success"):
+        print(f"❌ 数据集切分失败: {result.get('error', '未知错误')}")
+        return False
+
+    counts = result.get("counts", {})
+    print("✅ 数据集切分方案生成成功")
+    print(f"   - 切分策略: {result.get('split_strategy')}")
+    print(f"   - train: {counts.get('train_rows', 0)}")
+    print(f"   - valid: {counts.get('valid_rows', 0)}")
+    print(f"   - test: {counts.get('test_rows', 0)}")
+
+    if not result.get("requires_confirmation"):
+        print("❌ 数据集切分阶段未返回 requires_confirmation")
+        return False
+
+    split_modifications = json.dumps({
+        "train_ratio": 0.7,
+        "valid_ratio": 0.1,
+        "test_ratio": 0.2,
+        "split_method": "binned_regression",
+    }, ensure_ascii=False)
+
+    exec_result = test_submit_confirmation_and_execute(
+        result.get("confirmation_id"),
+        "modified",
+        split_modifications,
+    )
+    if not exec_result:
+        print("❌ 数据集切分确认失败")
+        return False
+
+    execution = exec_result.get("execution", {})
+    if not execution.get("success"):
+        print(f"❌ 数据集切分固化失败: {execution}")
+        return False
+
+    for key in ["train_raw_path", "test_raw_path"]:
+        path = execution.get(key)
+        if not path or not os.path.exists(path):
+            print(f"❌ 缺少切分资产: {key} -> {path}")
+            return False
+
+    valid_raw_path = execution.get("valid_raw_path")
+    if counts.get("valid_rows", 0) > 0 and (not valid_raw_path or not os.path.exists(valid_raw_path)):
+        print(f"❌ 缺少验证集资产: {valid_raw_path}")
+        return False
+
+    status_response = requests.get(f"{BASE_URL}/workflow/{SESSION_ID}/status", timeout=60)
+    if status_response.status_code != 200:
+        print(f"❌ 无法读取 workflow 状态: {status_response.status_code} - {status_response.text}")
+        return False
+
+    status_payload = status_response.json()
+    split_config = status_payload.get("context", {}).get("split_config", {})
+    if split_config.get("train_ratio") != 0.7 or split_config.get("valid_ratio") != 0.1:
+        print(f"❌ 用户修改后的切分配置未写入 workflow context: {split_config}")
+        return False
+
+    print(f"   - 修改后配置: {split_config}")
+    print(f"   - 执行模式: {execution.get('execution_mode')}")
+
+    print("✅ 数据集切分已确认并固化")
+    return True
+
+
 def main():
     """主测试函数"""
     print("\n" + "="*80)
@@ -514,29 +729,36 @@ def main():
     
     # 步骤 1: 启动工作流
     results.append(("启动工作流", test_start_workflow()))
+
+    # 步骤 2: 问题定义
+    results.append(("问题定义", test_problem_definition_stage()))
+
+    # 步骤 3: 数据契约检查
+    results.append(("数据契约检查", test_data_contract_check_stage()))
     
-    # 步骤 2: 数据清洗 (生成方案 + 执行)
+    # 步骤 4: 数据集切分
+    results.append(("数据集切分", test_data_splitting_stage()))
+
+    # 步骤 5: 数据清洗 (生成方案 + 执行)
     results.append(("数据清洗", test_data_cleaning_stage()))
     
-    # 步骤 3: 数据探索性分析
+    # 步骤 6: 数据探索性分析
     results.append(("数据探索性分析", test_data_exploration_stage()))
 
-    # 步骤 4: 特征工程 (生成方案 + 执行)
+    # 步骤 7: 特征工程 (生成方案 + 执行)
     results.append(("特征工程", test_feature_engineering_stage()))
 
-    # 步骤 5: 模型训练 (生成方案 + 执行)
+    # 步骤 8: 模型训练 (生成方案 + 执行)
     results.append(("模型训练", test_model_training_stage()))
 
-    # 步骤 6: 模型评估
+    # 步骤 9: 模型评估
     results.append(("模型评估", test_model_evaluation_stage()))
 
-    # 步骤 7: 列出资产
+    # 步骤 10: 资产列表
     results.append(("列出资产", test_list_assets()))
     
-    # 打印测试总结
     print("\n" + "="*80)
     print("测试总结")
-    print("="*80)
     
     passed = sum(1 for _, r in results if r)
     total = len(results)
