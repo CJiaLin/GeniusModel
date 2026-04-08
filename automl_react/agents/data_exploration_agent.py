@@ -12,7 +12,6 @@ from datetime import datetime
 
 from ..core.react_agent import ReActAgent
 from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
-from ..skills_loader import get_skill_loader
 from ..config import get_config_loader
 from ..logger.llm_logger import LLMLogger
 
@@ -40,25 +39,21 @@ class DataExplorationAgent(ReActAgent):
         self.task_type: Optional[str] = None
         self.data_info: Optional[Dict] = None
         self.exploration_result: Optional[str] = None
-        self.skill_loader = get_skill_loader()
         self.config_loader = get_config_loader()
         self.logger = LLMLogger(session_id=session_id)
 
     def _register_default_tools(self):
         """注册默认工具"""
+        super()._register_default_tools()
+        from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
+        from ..tools.stage_tools import StageResultTool
         self.register_tool("load_data", DataLoaderTool())
         self.register_tool("analyze_data", DataAnalyzerTool())
+        self.register_tool("query_stage_result", StageResultTool(session_id=self.session_id))
 
     def get_system_prompt(self) -> str:
         """获取系统提示词"""
         return self.config_loader.get_prompt("data_exploration", "system_prompt")
-
-    def _get_exploration_skill_content(self) -> str:
-        """获取探索性分析阶段使用的 skill 参考内容。"""
-        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
-        if not techniques:
-            return ""
-        return f"## 数据分析技术参考\n\n{techniques}\n"
 
     def explore(
         self,
@@ -102,9 +97,6 @@ class DataExplorationAgent(ReActAgent):
         except Exception as e:
             current_data_context = f"无法加载数据文件: {data_path}\n错误: {str(e)}"
 
-        # 加载 data-analysis skill 内容
-        skill_content = self._get_exploration_skill_content()
-
         # 构建用户提示词
         task_context = ""
         if task_description:
@@ -135,7 +127,6 @@ class DataExplorationAgent(ReActAgent):
             task_context=task_context,
             cleaning_context=cleaning_context,
             current_data_context=current_data_context,
-            skill_content=skill_content,
         )
 
         # 调用 LLM 生成报告
@@ -255,7 +246,6 @@ class DataExplorationAgent(ReActAgent):
         prompt_template = self.config_loader.get_prompt("data_exploration", "feature_suggestions_prompt")
         user_input = prompt_template.format(
             exploration_result=self.exploration_result,
-            skill_content=self._get_exploration_skill_content(),
             task_context=getattr(self, 'task_context', ''),
         )
 

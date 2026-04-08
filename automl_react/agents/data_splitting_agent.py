@@ -18,7 +18,6 @@ from sklearn.model_selection import GroupShuffleSplit, train_test_split
 
 from ..core.react_agent import ConfirmationRequired, ReActAgent
 from ..config import get_config_loader
-from ..skills_loader import get_skill_loader
 from ..tools.data_tools import DataAnalyzerTool, DataLoaderTool
 from ..utils.code_generator import CodeGenerator
 
@@ -462,9 +461,9 @@ class DataSplittingAgent(ReActAgent):
         self.split_config: Optional[Dict[str, Any]] = None
         self.data_info: Optional[Dict[str, Any]] = None
         self.config_loader = get_config_loader()
-        self.skill_loader = get_skill_loader()
 
     def _register_default_tools(self):
+        super()._register_default_tools()
         self.register_tool("load_data", DataLoaderTool())
         self.register_tool("analyze_data", DataAnalyzerTool())
 
@@ -550,6 +549,22 @@ class DataSplittingAgent(ReActAgent):
         result = self.run(user_input, stage="data_splitting_plan")
         self.split_plan = result.get("answer", "")
         return self.split_plan
+
+    def revise_plan(self, current_plan: str, modifications: str, **kwargs) -> str:
+        """基于用户反馈修订数据分割方案"""
+        prompt_template = self.config_loader.get_prompt("data_splitting", "plan_revision")
+        user_input = prompt_template.format(
+            current_plan=current_plan,
+            user_modifications=modifications,
+            target_column=getattr(self, "target_column", ""),
+            task_type=getattr(self, "task_type", ""),
+        )
+        result = self.run(user_input, stage="data_splitting_plan_revision")
+        self.split_plan = result.get("answer", "")
+        return self.split_plan
+
+    def get_modifiable_aspects(self) -> list:
+        return ["分割比例", "分层策略", "分割方法", "随机种子"]
 
     def _parse_modifications(self, modifications: Optional[str]) -> Dict[str, Any]:
         if not modifications or not modifications.strip():

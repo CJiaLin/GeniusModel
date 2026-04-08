@@ -14,7 +14,6 @@ import joblib
 
 from ..core.react_agent import ReActAgent, ConfirmationRequired
 from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
-from ..skills_loader import get_skill_loader
 from ..config import get_config_loader
 
 
@@ -46,13 +45,16 @@ class ModelTrainingAgent(ReActAgent):
         self.model_plan: Optional[str] = None
         self.model_code: Optional[str] = None
         self.model_result: Optional[Dict[str, Any]] = None
-        self.skill_loader = get_skill_loader()
         self.config_loader = get_config_loader()
 
     def _register_default_tools(self):
         """注册默认工具"""
+        super()._register_default_tools()
+        from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
+        from ..tools.stage_tools import StageResultTool
         self.register_tool("load_data", DataLoaderTool())
         self.register_tool("analyze_data", DataAnalyzerTool())
+        self.register_tool("query_stage_result", StageResultTool(session_id=self.session_id))
 
     def _get_training_artifact_paths(self) -> Dict[str, str]:
         """获取模型训练阶段的标准资产路径。"""
@@ -376,23 +378,6 @@ class ModelTrainingAgent(ReActAgent):
         """获取系统提示词"""
         return self.config_loader.get_prompt("model_training", "system_prompt")
 
-    def _get_phase3_skill_content(self) -> str:
-        """获取模型训练阶段使用的 skill 参考内容。"""
-        skill_content = self.skill_loader.get_skill_content("afrexai-ml-engineering-1.0.0")
-        if not skill_content:
-            return ""
-
-        import re
-
-        phase3_match = re.search(
-            r'##?\s*Phase\s*3[:：].*?\n(.*?)(?=##?\s*Phase\s*4|\Z)',
-            skill_content,
-            re.DOTALL | re.IGNORECASE
-        )
-        if phase3_match:
-            return "## Phase 3: Experiment Management\n\n" + phase3_match.group(1).strip()
-        return skill_content
-
     def analyze_data_for_modeling(
         self,
         data_path: str,
@@ -594,9 +579,6 @@ class ModelTrainingAgent(ReActAgent):
         except Exception as e:
             current_training_data_context = f"无法加载数据文件: {path}\n错误: {str(e)}"
 
-        # 加载 afrexai-ml-engineering skill 的 Phase 3
-        phase3_content = self._get_phase3_skill_content()
-
         # 从配置加载 Prompt
         prompt_template = self.config_loader.get_prompt("model_training", "plan_generation")
 
@@ -608,7 +590,6 @@ class ModelTrainingAgent(ReActAgent):
             exploration_report_context=exploration_report_context,
             feature_report_context=feature_report_context,
             current_training_data_context=current_training_data_context,
-            skill_content=phase3_content
         )
 
         # 调用 LLM 生成方案
@@ -617,6 +598,22 @@ class ModelTrainingAgent(ReActAgent):
         self.model_plan = result.get("answer", "")
 
         return self.model_plan
+
+    def revise_plan(self, current_plan: str, modifications: str, **kwargs) -> str:
+        """基于用户反馈修订建模方案"""
+        prompt_template = self.config_loader.get_prompt("model_training", "plan_revision")
+        user_input = prompt_template.format(
+            current_plan=current_plan,
+            user_modifications=modifications,
+            target_column=getattr(self, "target_column", ""),
+            task_type=getattr(self, "task_type", ""),
+        )
+        result = self.run(user_input, stage="model_training_plan_revision")
+        self.model_plan = result.get("answer", "")
+        return self.model_plan
+
+    def get_modifiable_aspects(self) -> list:
+        return ["模型选择", "超参搜索策略", "评估指标", "交叉验证方式", "目标变换"]
 
     def request_user_confirmation(self) -> None:
         """
@@ -683,7 +680,6 @@ class ModelTrainingAgent(ReActAgent):
             task_type=self.task_type,
             data_info_text=data_info_text,
             plan=self.model_plan,
-            skill_content=self._get_phase3_skill_content(),
             modifications=modifications_text,
             train_split_path=self.train_split_path or artifact_paths["train_split_path"],
             valid_split_path=self.valid_split_path or artifact_paths["valid_split_path"],

@@ -42,13 +42,19 @@ class CodeActAgent:
     通过迭代的方式生成、执行、观察、修正代码。
     """
     
-    def __init__(self, llm: Any = None, max_iterations: int = 5, timeout: int = 300, session_id: str = None):
+    def __init__(self, llm: Any = None, max_iterations: int = 5, timeout: int = 300,
+                 session_id: str = None, use_subprocess: bool = True):
         self.llm = llm
         self.max_iterations = max_iterations
         self.timeout = timeout
         self.session_id = session_id or "default"
         self.config_loader = get_config_loader()
         self.llm_logger = get_llm_logger(session_id=self.session_id)
+        # 子进程执行模式（可通过环境变量 CODEACT_USE_SUBPROCESS=0 关闭）
+        self.use_subprocess = use_subprocess and os.environ.get("CODEACT_USE_SUBPROCESS", "1") != "0"
+        if self.use_subprocess:
+            from .subprocess_executor import SubprocessCodeExecutor
+            self.subprocess_executor = SubprocessCodeExecutor(timeout=timeout)
     
     def generate_and_execute(
         self,
@@ -221,7 +227,7 @@ class CodeActAgent:
     
     def _build_initial_messages(self, task_prompt: str) -> List[BaseMessage]:
         """构建首轮代码生成消息。"""
-        system_content = """你是一位专业的 Python 工程师。
+        system_content = """你是一位专业的 Python 工程师，擅长生成健壮、可直接执行的数据处理和机器学习代码。
 
 你的职责：
 1. 根据用户任务生成完整、可执行的 Python 代码
@@ -229,11 +235,15 @@ class CodeActAgent:
 3. 输出的代码必须可以直接运行，且包含所有必要导入
 
 代码生成要求：
-1. 代码必须完整、可执行
-2. 使用绝对路径处理文件
-3. 确保所有括号、引号正确闭合
-4. 在代码末尾输出执行结果
-5. 只输出 Python 代码块，用 ```python 和 ``` 包围"""
+1. 代码必须完整、可执行，所有括号和引号正确闭合
+2. 使用绝对路径处理文件，保存前用 os.makedirs 确保目录存在
+3. 在代码末尾输出执行结果
+4. 只输出 Python 代码块，用 ```python 和 ``` 包围
+
+常见错误预防：
+- 将 numpy 类型转为 Python 原生类型后再做 JSON 序列化
+- 使用 .copy() 避免 SettingWithCopyWarning
+- 处理可能的空 DataFrame 或缺失列情况"""
 
         human_content = f"""## 当前任务
 
@@ -246,20 +256,23 @@ class CodeActAgent:
 
     def _build_retry_messages(self, task_prompt: str, code: str, error: str) -> List[BaseMessage]:
         """构建重试代码生成消息。"""
-        system_content = """你是一位专业的 Python 工程师。
+        system_content = """你是一位专业的 Python 工程师，擅长诊断和修复代码错误。
 
 你的职责：
-1. 修复上一轮生成代码中的问题
-2. 严格保留用户任务中的真实数据路径、字段和输出要求
-3. 重新输出完整、可执行的 Python 代码
+1. 分析上一轮代码的错误原因，按错误类型针对性修复
+2. 保留上一轮代码中正常工作的部分，仅修改出错的部分
+3. 严格保留用户任务中的真实数据路径、字段和输出要求
 
-修复要求：
-1. 仔细检查代码语法
-2. 确保所有导入的库都已导入
-3. 确保文件路径正确
-4. 确保变量名一致
-5. 处理可能的异常情况
-6. 只输出 Python 代码块，用 ```python 和 ``` 包围"""
+错误诊断指南：
+- ImportError/ModuleNotFoundError → 检查导入语句，使用标准库替代
+- KeyError/列名不存在 → 先打印 df.columns 确认实际列名
+- FileNotFoundError → 确认路径正确，用 os.makedirs 创建目录
+- TypeError（numpy 序列化）→ 用 int()/float()/str() 转换后再序列化
+- SyntaxError → 检查括号、引号、缩进是否正确闭合
+
+输出要求：
+1. 只输出 Python 代码块，用 ```python 和 ``` 包围
+2. 输出完整修复后代码，不是补丁片段"""
 
         human_content = f"""## 原始任务
 
@@ -358,32 +371,73 @@ class CodeActAgent:
             return {"success": False, "error": str(e)}
     
     def _execute_code(self, code: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """执行代码"""
-        # 准备执行环境
+        """执行代码（根据配置选择子进程或内联模式）"""
+        if self.use_subprocess:
+            return self._execute_code_subprocess(code, context)
+        return self._execute_code_inline(code, context)
+
+    def _execute_code_subprocess(self, code: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """在子进程中执行代码"""
+        result = self.subprocess_executor.execute(
+            code=code,
+            context=context or {},
+        )
+
+        if result.success:
+            return {
+                "success": True,
+                "output": result.output or "代码执行成功",
+                "variables": result.variables,
+            }
+        else:
+            error_msg = result.error or "代码执行失败"
+            if result.timed_out:
+                error_msg = f"执行超时（{self.timeout}秒）: {error_msg}"
+            # 包含 stdout 信息辅助调试
+            if result.output:
+                error_msg = f"{error_msg}\n\nStdout:\n{result.output}"
+            return {
+                "success": False,
+                "error": error_msg,
+                "variables": result.variables,
+            }
+
+    def _execute_code_inline(self, code: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """在当前进程中执行代码（回退模式，带 stdout/stderr 捕获）"""
+        import io
+        import contextlib
+
         local_vars = context.copy() if context else {}
-        # Use script-like execution context so `if __name__ == "__main__"` blocks run.
         local_vars['__name__'] = '__main__'
         local_vars['__builtins__'] = __builtins__
-        
+
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+
         try:
-            # 使用 exec 执行代码
-            exec(code, local_vars)
-            
-            # 删除内部变量
+            with contextlib.redirect_stdout(stdout_buf):
+                with contextlib.redirect_stderr(stderr_buf):
+                    exec(code, local_vars)
+
             for key in ['__name__', '__builtins__']:
                 if key in local_vars:
                     del local_vars[key]
-            
+
+            output = stdout_buf.getvalue() or "代码执行成功"
             return {
                 "success": True,
-                "output": "代码执行成功",
+                "output": output,
                 "variables": local_vars
             }
-            
+
         except Exception as e:
+            stderr_output = stderr_buf.getvalue()
+            error_detail = f"{type(e).__name__}: {str(e)}\n\n{traceback.format_exc()}"
+            if stderr_output:
+                error_detail = f"{error_detail}\n\nStderr:\n{stderr_output}"
             return {
                 "success": False,
-                "error": f"{type(e).__name__}: {str(e)}\n\n{traceback.format_exc()}",
+                "error": error_detail,
                 "variables": {}
             }
     

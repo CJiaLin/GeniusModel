@@ -12,7 +12,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from ..core.react_agent import ReActAgent, ConfirmationRequired
 from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
-from ..skills_loader import get_skill_loader
 from ..config import get_config_loader
 from ..logger.llm_logger import LLMLogger
 
@@ -45,35 +44,21 @@ class FeatureEngineeringAgent(ReActAgent):
         self.data_info: Optional[Dict] = None
         self.feature_plan: Optional[str] = None
         self.feature_code: Optional[str] = None
-        self.skill_loader = get_skill_loader()
         self.config_loader = get_config_loader()
         self.logger = LLMLogger(session_id=session_id)
 
     def _register_default_tools(self):
         """注册默认工具"""
+        super()._register_default_tools()
+        from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
+        from ..tools.stage_tools import StageResultTool
         self.register_tool("load_data", DataLoaderTool())
         self.register_tool("analyze_data", DataAnalyzerTool())
+        self.register_tool("query_stage_result", StageResultTool(session_id=self.session_id))
 
     def get_system_prompt(self) -> str:
         """获取系统提示词"""
         return self.config_loader.get_prompt("feature_engineering", "system_prompt")
-
-    def _get_phase2_skill_content(self) -> str:
-        """获取特征工程阶段使用的 skill 参考内容。"""
-        skill_content = self.skill_loader.get_skill_content("afrexai-ml-engineering-1.0.0")
-        if not skill_content:
-            return ""
-
-        import re
-
-        phase2_match = re.search(
-            r'##?\s*Phase\s*2[:：]\s*Data Engineering.*?\n(.*?)(?=##?\s*Phase\s*3|\Z)',
-            skill_content,
-            re.DOTALL | re.IGNORECASE
-        )
-        if phase2_match:
-            return phase2_match.group(1)
-        return skill_content
 
     def analyze_features(self, data_path: str, target_column: str) -> Dict[str, Any]:
         """
@@ -213,9 +198,6 @@ class FeatureEngineeringAgent(ReActAgent):
                 "error": str(e)
             }
 
-        # 加载 afrexai-ml-engineering skill 的 Phase 2
-        phase2_content = self._get_phase2_skill_content()
-
         # 从配置加载 Prompt
         prompt_template = self.config_loader.get_prompt("feature_engineering", "plan_generation")
 
@@ -226,7 +208,6 @@ class FeatureEngineeringAgent(ReActAgent):
             task_context=task_context,
             exploration_context=exploration_context,
             current_data_context=current_data_context,
-            skill_content=phase2_content,
             verified_facts_json=json.dumps(verified_facts, ensure_ascii=False, indent=2),
         )
 
@@ -236,6 +217,22 @@ class FeatureEngineeringAgent(ReActAgent):
         self.feature_plan = result.get("answer", "")
 
         return self.feature_plan
+
+    def revise_plan(self, current_plan: str, modifications: str, **kwargs) -> str:
+        """基于用户反馈修订特征工程方案"""
+        prompt_template = self.config_loader.get_prompt("feature_engineering", "plan_revision")
+        user_input = prompt_template.format(
+            current_plan=current_plan,
+            user_modifications=modifications,
+            data_path=getattr(self, "data_path", ""),
+            target_column=getattr(self, "target_column", ""),
+        )
+        result = self.run(user_input, stage="feature_engineering_plan_revision")
+        self.feature_plan = result.get("answer", "")
+        return self.feature_plan
+
+    def get_modifiable_aspects(self) -> list:
+        return ["特征构造方法", "编码策略", "特征选择", "交叉特征", "缺失值填充策略"]
 
     def request_user_confirmation(self) -> None:
         """
@@ -293,7 +290,6 @@ class FeatureEngineeringAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
         self.features_data_path = str(self.asset_manager.session_dir / "data" / "features_data.csv")
-        skill_content = self._get_phase2_skill_content()
 
         prompt_template = self.config_loader.get_prompt("feature_engineering", "code_generation_full")
         task_prompt = prompt_template.format(
@@ -302,7 +298,6 @@ class FeatureEngineeringAgent(ReActAgent):
             task_type=self.task_type,
             data_info_text=data_info_text,
             plan=self.feature_plan,
-            skill_content=skill_content,
             modifications=modifications_text,
             features_data_path=self.features_data_path,
             task_context=getattr(self, 'task_context', ''),
@@ -369,12 +364,28 @@ class FeatureEngineeringAgent(ReActAgent):
         if len(non_target_cols) <= 0:
             return False, "特征工程输出缺少可用特征列"
 
+        # 行数校验：特征工程合并了 train/valid/test 三个拆分文件，
+        # 因此输出行数应等于三者之和，而非仅 data_path（train_raw）的行数。
         in_path = context.get("data_path") or self.data_path
         if in_path:
             try:
-                df_in = pd.read_csv(in_path)
-                if df_out.shape[0] != df_in.shape[0]:
-                    return False, "特征工程输出行数与输入不一致"
+                import os
+                in_dir = os.path.dirname(in_path)
+                total_rows = 0
+                split_files_found = False
+                for split_name in ("train_raw.csv", "valid_raw.csv", "test_raw.csv"):
+                    split_path = os.path.join(in_dir, split_name)
+                    if os.path.exists(split_path):
+                        split_files_found = True
+                        total_rows += len(pd.read_csv(split_path))
+                if split_files_found:
+                    if df_out.shape[0] != total_rows:
+                        return False, f"特征工程输出行数({df_out.shape[0]})与输入总行数({total_rows})不一致"
+                else:
+                    # 没有拆分文件时，回退到 data_path 对比
+                    df_in = pd.read_csv(in_path)
+                    if df_out.shape[0] != df_in.shape[0]:
+                        return False, "特征工程输出行数与输入不一致"
             except Exception:
                 pass
 
@@ -528,7 +539,6 @@ class FeatureEngineeringAgent(ReActAgent):
             target_column=self.target_column,
             task_type=self.task_type,
             metrics_result_path=metrics_result_path,
-            skill_content=self._get_phase2_skill_content(),
             modifications_text=modifications_text,
             task_context=getattr(self, 'task_context', ''),
         )
@@ -596,7 +606,6 @@ class FeatureEngineeringAgent(ReActAgent):
             feature_plan=self.feature_plan or "无",
             metrics_data=json.dumps(metrics_data, indent=2, ensure_ascii=False),
             metrics_report_path=metrics_report_path,
-            skill_content=self._get_phase2_skill_content(),
             modifications_text=modifications_text,
             task_context=getattr(self, 'task_context', ''),
         )

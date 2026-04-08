@@ -10,7 +10,6 @@ from datetime import datetime
 
 from ..core.react_agent import ReActAgent, ConfirmationRequired
 from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
-from ..skills_loader import get_skill_loader
 from ..config import get_config_loader
 
 
@@ -38,33 +37,22 @@ class DataCleaningAgent(ReActAgent):
         self.data_info: Optional[Dict] = None
         self.cleaning_plan: Optional[str] = None
         self.cleaning_code: Optional[str] = None
-        self.skill_loader = get_skill_loader()
         self.config_loader = get_config_loader()
 
     def _register_default_tools(self):
         """注册默认工具"""
+        super()._register_default_tools()
+        from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
+        from ..tools.profile_tools import DataProfileTool
+        from ..tools.stage_tools import StageResultTool
         self.register_tool("load_data", DataLoaderTool())
         self.register_tool("analyze_data", DataAnalyzerTool())
+        self.register_tool("profile_data", DataProfileTool())
+        self.register_tool("query_stage_result", StageResultTool(session_id=self.session_id))
 
     def get_system_prompt(self) -> str:
         """获取系统提示词"""
         return self.config_loader.get_prompt("data_cleaning", "system_prompt")
-
-    def _get_cleaning_skill_content(self) -> str:
-        """获取数据清洗阶段使用的 skill 参考内容。"""
-        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
-        pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
-
-        parts = []
-        if techniques:
-            parts.append(f"### 数据清洗技术参考\n\n{techniques[:1500]}")
-        if pitfalls:
-            parts.append(f"### 数据陷阱参考\n\n{pitfalls[:1500]}")
-
-        if not parts:
-            return ""
-
-        return "⚠️ 注意：以下内容为技术参考，包含示例数据，仅供参考方法\n\n" + "\n\n".join(parts) + "\n\n⚠️ 技术参考结束\n"
 
     def analyze_data(self, data_path: str) -> Dict[str, Any]:
         """
@@ -78,12 +66,9 @@ class DataCleaningAgent(ReActAgent):
         """
         self.data_path = data_path
 
-        # 加载 data-analysis skill 的 pitfalls.md
-        pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
-
         # 构建分析提示词
         prompt_template = self.config_loader.get_prompt("data_cleaning", "quality_analysis_prompt")
-        pitfalls_content = f"参考以下数据陷阱指南:\n{pitfalls[:2000]}" if pitfalls else ""
+        pitfalls_content = "如需参考数据陷阱指南，请使用 read_skill 工具读取 data-analysis-1.0.2 的 pitfalls 章节。"
         user_input = prompt_template.format(
             data_path=data_path,
             pitfalls_content=pitfalls_content,
@@ -309,10 +294,8 @@ class DataCleaningAgent(ReActAgent):
         print(f"[DataCleaningAgent] 缺失值列数: {len(self.data_info['missing_analysis'])}")
         print(f"[DataCleaningAgent] 数据质量报告预览:\n{quality_report[:500]}...")
 
-        # 加载数据分析 skill，作为数据清洗阶段的方法参考
         # 从配置加载 Prompt
         prompt_template = self.config_loader.get_prompt("data_cleaning", "plan_generation")
-        skill_content = self._get_cleaning_skill_content()
 
         # 添加用户的建模背景
         task_context = ""
@@ -330,7 +313,6 @@ class DataCleaningAgent(ReActAgent):
         user_input = prompt_template.format(
             data_path=path,
             quality_report=quality_report,
-            skill_content=skill_content,
             task_context=task_context,
             shape=self.data_info['shape']
         )
@@ -342,6 +324,21 @@ class DataCleaningAgent(ReActAgent):
         self.cleaning_plan = result.get("answer", "")
 
         return self.cleaning_plan
+
+    def revise_plan(self, current_plan: str, modifications: str, **kwargs) -> str:
+        """基于用户反馈修订清洗方案"""
+        prompt_template = self.config_loader.get_prompt("data_cleaning", "plan_revision")
+        user_input = prompt_template.format(
+            current_plan=current_plan,
+            user_modifications=modifications,
+            data_path=self.data_path or "",
+        )
+        result = self.run(user_input, stage="data_cleaning_plan_revision")
+        self.cleaning_plan = result.get("answer", "")
+        return self.cleaning_plan
+
+    def get_modifiable_aspects(self) -> list:
+        return ["缺失值处理策略", "异常值处理方式", "重复行处理", "列删除/保留", "数据类型转换"]
 
     def request_user_confirmation(self) -> None:
         """
@@ -404,13 +401,11 @@ class DataCleaningAgent(ReActAgent):
 """
 
         self.cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
-        skill_content = self._get_cleaning_skill_content()
-        
+
         prompt_template = self.config_loader.get_prompt("data_cleaning", "code_generation_full")
         task_prompt = prompt_template.format(
             data_path=self.data_path,
             plan=self.cleaning_plan,
-            skill_content=skill_content,
             modifications=modifications_text,
             data_info_text=data_info_text,
             cleaned_data_path=self.cleaned_data_path,

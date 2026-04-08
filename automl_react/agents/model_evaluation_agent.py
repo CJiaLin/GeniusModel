@@ -9,7 +9,6 @@ from typing import Any, Dict, Optional
 
 from ..core.react_agent import ReActAgent, ConfirmationRequired
 from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
-from ..skills_loader import get_skill_loader
 from ..evaluation import ModelEvaluator
 
 
@@ -19,27 +18,20 @@ class ModelEvaluationAgent(ReActAgent):
     def __init__(self, llm: Any = None, session_id: str = None, verbose: bool = False):
         super().__init__(llm=llm, session_id=session_id, max_iterations=8, verbose=verbose)
         self.evaluator = ModelEvaluator(session_id=self.session_id)
-        self.skill_loader = get_skill_loader()
         self.evaluation_plan: Optional[str] = None
 
     def _register_default_tools(self):
         """注册默认工具。"""
+        super()._register_default_tools()
+        from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
+        from ..tools.stage_tools import StageResultTool
         self.register_tool("load_data", DataLoaderTool())
         self.register_tool("analyze_data", DataAnalyzerTool())
+        self.register_tool("query_stage_result", StageResultTool(session_id=self.session_id))
 
     def get_system_prompt(self) -> str:
         """获取系统提示词。"""
         return self.config_loader.get_prompt("model_evaluation", "system_prompt")
-
-    def _get_benchmark_skill_content(self) -> str:
-        """获取模型评估阶段参考内容。"""
-        benchmark = self.skill_loader.get_skill_reference(
-            "ml-model-eval-benchmark-0.1.0",
-            "benchmarking-guide.md"
-        )
-        if not benchmark:
-            return ""
-        return "⚠️ 注意：以下内容为评估方法参考，仅供参考方法，不可替代当前会话的真实训练产物与测试数据。\n\n" + benchmark[:2500]
 
     def generate_evaluation_plan(
         self,
@@ -105,7 +97,6 @@ class ModelEvaluationAgent(ReActAgent):
             task_type=task_type,
             task_context=task_context,
             current_evaluation_context=current_evaluation_context,
-            skill_content=self._get_benchmark_skill_content(),
         )
 
         result = self.run(user_input, stage="model_evaluation_plan")

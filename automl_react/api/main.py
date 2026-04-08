@@ -19,10 +19,12 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import json
 import asyncio
-from datetime import datetime
+import shutil
+from datetime import datetime, timedelta
 
 from automl_react.agents import (
     DataCleaningAgent,
+    DataExplorationAgent,
     DataSplittingAgent,
     FeatureEngineeringAgent,
     ModelEvaluationAgent,
@@ -80,6 +82,13 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     model: str = "claude-sonnet-4-20250514-thinking"
+
+
+class PlanRevisionRequest(BaseModel):
+    """方案修订请求"""
+    session_id: str
+    confirmation_id: str
+    modifications: str
 
 
 # 辅助函数
@@ -360,12 +369,18 @@ def get_session(session_id: str) -> Dict[str, Any]:
                 # 使用 WorkflowState.load 方法加载状态
                 workflow_state = WorkflowState.load(session_id)
                 _normalize_workflow_data_path(session_id, workflow_state)
-                
+
+                # 尝试恢复 ConfirmationManager
+                cm_path = str(session_dir / "state" / "confirmation_state.json")
+                confirmation_manager = ConfirmationManager.load_from_disk(cm_path)
+                if confirmation_manager is None:
+                    confirmation_manager = ConfirmationManager(save_path=cm_path)
+
                 _sessions[session_id] = {
                     "session_id": session_id,
                     "created_at": workflow_state.history[0].get("timestamp", datetime.now().isoformat()) if workflow_state.history else datetime.now().isoformat(),
                     "workflow_state": workflow_state,
-                    "confirmation_manager": None,  # 需要重新创建
+                    "confirmation_manager": confirmation_manager,
                     "agents": {},  # 需要重新创建
                     "context": workflow_state.context
                 }
@@ -391,6 +406,15 @@ def get_session(session_id: str) -> Dict[str, Any]:
                 "context": {}
             }
     return _sessions[session_id]
+
+
+def _ensure_agent(session: dict, agent_key: str, agent_class, **init_kwargs):
+    """获取或创建 Agent 实例，确保缓存到 session。"""
+    agent = session["agents"].get(agent_key)
+    if agent is None:
+        agent = agent_class(**init_kwargs)
+        session["agents"][agent_key] = agent
+    return agent
 
 
 class LLMClientError(Exception):
@@ -524,7 +548,8 @@ async def start_workflow(request: StartWorkflowRequest):
             pass
     
     session["workflow_state"] = workflow_state
-    session["confirmation_manager"] = ConfirmationManager()
+    cm_path = str(Path("assets") / request.session_id / "state" / "confirmation_state.json")
+    session["confirmation_manager"] = ConfirmationManager(save_path=cm_path)
     
     # 创建 LLM 客户端
     try:
@@ -541,7 +566,6 @@ async def start_workflow(request: StartWorkflowRequest):
         )
     
     # 创建 Agents
-    from automl_react.agents import DataExplorationAgent
     session["agents"]["exploration"] = DataExplorationAgent(
         llm=llm,
         session_id=request.session_id
@@ -633,18 +657,16 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     confirmation_manager = session.get("confirmation_manager")
     if not confirmation_manager:
         # Session 恢复后需要重新创建确认管理器
-        confirmation_manager = ConfirmationManager()
+        cm_path = str(Path("assets") / session_id / "state" / "confirmation_state.json")
+        confirmation_manager = ConfirmationManager(save_path=cm_path)
         session["confirmation_manager"] = confirmation_manager
         print(f"[API] 已重新创建确认管理器")
     
     # 根据阶段执行相应操作
     if stage == "problem_definition":
-        agent = session["agents"].get("analysis")
-        if not agent:
-            model = workflow_state.get_context("model", "kimi-k2.5")
-            llm = create_llm_client(model)
-            agent = DataAnalysisAgent(llm=llm, session_id=session_id)
-            session["agents"]["analysis"] = agent
+        model = workflow_state.get_context("model", "kimi-k2.5")
+        llm = create_llm_client(model)
+        agent = _ensure_agent(session, "analysis", DataAnalysisAgent, llm=llm, session_id=session_id)
 
         try:
             task_description = workflow_state.get_context("task_description", "")
@@ -742,12 +764,9 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     elif stage == "data_splitting":
         try:
             print(f"[API] ========== 数据集切分阶段开始 ==========")
-            agent = session["agents"].get("splitting")
-            if not agent:
-                model = workflow_state.get_context("model", "kimi-k2.5")
-                llm = create_llm_client(model)
-                agent = DataSplittingAgent(llm=llm, session_id=session_id)
-                session["agents"]["splitting"] = agent
+            model = workflow_state.get_context("model", "kimi-k2.5")
+            llm = create_llm_client(model)
+            agent = _ensure_agent(session, "splitting", DataSplittingAgent, llm=llm, session_id=session_id)
             problem_def = _get_problem_definition_payload(workflow_state)
             split_plan = agent.generate_split_plan(
                 data_path=data_path,
@@ -792,6 +811,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     "split_config": split_config,
                 },
             )
+            confirmation_point.modifiable_aspects = agent.get_modifiable_aspects()
 
             print(f"[API] ========== 数据集切分阶段完成 ==========")
             return {
@@ -806,13 +826,16 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 "split_config": split_config,
                 "requires_confirmation": True,
                 "confirmation_id": confirmation_point.id,
+                "modifiable_aspects": confirmation_point.modifiable_aspects,
             }
         except Exception as e:
             import traceback
             return {"success": False, "error": f"{e}\n{traceback.format_exc()}"}
 
     elif stage == "data_exploration":
-        agent = session["agents"].get("exploration")
+        model = workflow_state.get_context("model", "kimi-k2.5")
+        llm = create_llm_client(model)
+        agent = _ensure_agent(session, "exploration", DataExplorationAgent, llm=llm, session_id=session_id)
         if not agent:
             return {"success": False, "error": "DataExploration Agent 未初始化"}
         
@@ -876,7 +899,9 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
             return {"success": False, "error": error_detail}
     
     elif stage == "data_cleaning":
-        agent = session["agents"].get("cleaning")
+        model = workflow_state.get_context("model", "kimi-k2.5")
+        llm = create_llm_client(model)
+        agent = _ensure_agent(session, "cleaning", DataCleaningAgent, llm=llm, session_id=session_id)
         if agent:
             try:
                 print(f"[API] ========== 数据清洗阶段开始 ==========")
@@ -915,13 +940,15 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     stage="data_cleaning",
                     proposal_content=result
                 )
-                
+                confirmation_point.modifiable_aspects = agent.get_modifiable_aspects()
+
                 return {
                     "success": True,
                     "stage": stage,
                     "proposal": result,
                     "requires_confirmation": True,
-                    "confirmation_id": confirmation_point.id
+                    "confirmation_id": confirmation_point.id,
+                    "modifiable_aspects": confirmation_point.modifiable_aspects,
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
@@ -933,26 +960,8 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
             print(f"[API] 重新创建特征工程 Agent...")
             model = workflow_state.get_context("model", "kimi-k2.5")
             llm = create_llm_client(model)
-            asset_manager = get_asset_manager(session_id=session_id)
-            
-            # 获取清洗后的数据路径
-            cleaned_data_path = _get_train_raw_data_path(workflow_state) or data_path
-            cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
-            if cleaning_result_json:
-                try:
-                    cleaning_data = json.loads(cleaning_result_json)
-                    cleaned_data_path = cleaning_data.get("cleaned_data_path", data_path)
-                except:
-                    pass
-            
-            agent = FeatureEngineeringAgent(
-                llm=llm,
-                asset_manager=asset_manager,
-                data_path=cleaned_data_path,
-                target_column=target_column,
-                task_type=task_type
-            )
-            session["agents"]["feature"] = agent
+
+            agent = _ensure_agent(session, "feature", FeatureEngineeringAgent, llm=llm, session_id=session_id)
             print(f"[API] 特征工程 Agent 已重新创建")
         
         if agent:
@@ -1011,19 +1020,23 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     stage="feature_engineering",
                     proposal_content=result
                 )
-                
+                confirmation_point.modifiable_aspects = agent.get_modifiable_aspects()
+
                 return {
                     "success": True,
                     "stage": stage,
                     "proposal": result,
                     "requires_confirmation": True,
-                    "confirmation_id": confirmation_point.id
+                    "confirmation_id": confirmation_point.id,
+                    "modifiable_aspects": confirmation_point.modifiable_aspects,
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
     elif stage == "model_training":
-        agent = session["agents"].get("model")
+        model = workflow_state.get_context("model", "kimi-k2.5")
+        llm = create_llm_client(model)
+        agent = _ensure_agent(session, "model", ModelTrainingAgent, llm=llm, session_id=session_id)
         if agent:
             try:
                 print(f"[API] ========== 模型训练阶段开始 ==========")
@@ -1086,24 +1099,23 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     stage="model_training",
                     proposal_content=result
                 )
+                confirmation_point.modifiable_aspects = agent.get_modifiable_aspects()
 
                 return {
                     "success": True,
                     "stage": stage,
                     "proposal": result,
                     "requires_confirmation": True,
-                    "confirmation_id": confirmation_point.id
+                    "confirmation_id": confirmation_point.id,
+                    "modifiable_aspects": confirmation_point.modifiable_aspects,
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
     elif stage == "model_evaluation":
-        agent = session["agents"].get("evaluation")
-        if not agent:
-            model = workflow_state.get_context("model", "kimi-k2.5")
-            llm = create_llm_client(model)
-            agent = ModelEvaluationAgent(llm=llm, session_id=session_id)
-            session["agents"]["evaluation"] = agent
+        model = workflow_state.get_context("model", "kimi-k2.5")
+        llm = create_llm_client(model)
+        agent = _ensure_agent(session, "evaluation", ModelEvaluationAgent, llm=llm, session_id=session_id)
 
         try:
             print(f"[API] ========== 模型评估阶段开始 ==========")
@@ -1261,6 +1273,16 @@ async def submit_confirmation(request: UserConfirmationRequest):
                         WorkflowStage.COMPLETED,
                         message="Model evaluation completed"
                     )
+                    # 自动生成报告和 JSON 摘要
+                    try:
+                        report_gen = ReportGenerator(session_id=session_id)
+                        data_path = workflow_state.get_context("data_path", "")
+                        report = report_gen.generate_report(data_path, target_column, task_type)
+                        report_gen.export_to_html(report)
+                        report_gen.generate_summary_json(data_path, target_column, task_type)
+                        print(f"[API] 自动生成报告完成")
+                    except Exception as report_err:
+                        print(f"[API] 自动报告生成失败（不影响主流程）: {report_err}")
         except Exception as e:
             return JSONResponse(
                 status_code=500,
@@ -1307,6 +1329,118 @@ async def submit_confirmation(request: UserConfirmationRequest):
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _get_agent_for_stage(session: Dict, stage: str):
+    """根据阶段名返回对应的 Agent 实例。"""
+    stage_agent_map = {
+        "problem_definition": "analysis",
+        "data_contract_check": "analysis",
+        "data_splitting": "splitting",
+        "data_cleaning": "cleaning",
+        "feature_engineering": "feature",
+        "model_training": "model",
+        "model_evaluation": "evaluation",
+    }
+    agent_key = stage_agent_map.get(stage)
+    if not agent_key:
+        raise HTTPException(status_code=400, detail=f"不支持方案修订的阶段: {stage}")
+
+    agents = session.get("agents", {})
+    agent = agents.get(agent_key)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"阶段 '{stage}' 对应的 Agent 未初始化")
+    return agent
+
+
+@app.post("/confirmation/revise")
+async def revise_plan(request: PlanRevisionRequest):
+    """
+    修订当前方案。
+
+    用户审阅方案后提供修改意见，系统基于反馈生成修订后方案，
+    再返回新的 confirmation_id 供用户确认或继续修改。
+    """
+    session = get_session(request.session_id)
+    confirmation_manager = session.get("confirmation_manager")
+
+    if not confirmation_manager:
+        raise HTTPException(status_code=404, detail="确认管理器不存在")
+
+    # 查找当前确认点
+    current = confirmation_manager._find_point_by_id(request.confirmation_id)
+    if not current:
+        # 也尝试当前活跃的确认点
+        current = confirmation_manager.current
+        if not current:
+            raise HTTPException(status_code=404, detail="未找到对应的确认点")
+
+    stage = current.stage
+
+    # 获取对应 Agent
+    agent = _get_agent_for_stage(session, stage)
+
+    # 记录本轮修订
+    current.revision_history.append({
+        "round": len(current.revision_history) + 1,
+        "user_feedback": request.modifications,
+        "previous_proposal": current.proposal_content,
+        "timestamp": datetime.now().isoformat(),
+    })
+
+    # 调用 Agent 修订方案
+    try:
+        revised_plan = agent.revise_plan(
+            current_plan=current.proposal_content,
+            modifications=request.modifications,
+        )
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"阶段 '{stage}' 不支持方案修订",
+        )
+
+    # 标记旧确认点状态
+    current.set_user_response(
+        status=ConfirmationStatus.REVISION_REQUESTED,
+        modifications=request.modifications,
+    )
+
+    # 创建新确认点
+    new_point = confirmation_manager.add_confirmation_point(
+        stage=stage,
+        proposal_content=revised_plan,
+        metadata={
+            "stage": stage,
+            "is_revision": True,
+            "parent_id": current.id,
+            "revision_round": len(current.revision_history),
+        },
+    )
+    new_point.modifiable_aspects = agent.get_modifiable_aspects()
+    new_point.revision_history = current.revision_history
+
+    # 保存修订后方案到资产
+    asset_manager = get_asset_manager(session_id=request.session_id)
+    stage_asset_map = {
+        "data_cleaning": ("cleaning", "cleaning_plan.md"),
+        "feature_engineering": ("features", "feature_plan.md"),
+        "model_training": ("models", "model_plan.md"),
+        "data_splitting": ("data", "split_plan.md"),
+    }
+    if stage in stage_asset_map:
+        asset_type, filename = stage_asset_map[stage]
+        asset_manager.save_data(revised_plan, filename, asset_type)
+
+    return {
+        "success": True,
+        "stage": stage,
+        "proposal": revised_plan,
+        "modifiable_aspects": new_point.modifiable_aspects,
+        "revision_round": len(new_point.revision_history),
+        "requires_confirmation": True,
+        "confirmation_id": new_point.id,
+    }
 
 
 async def execute_data_cleaning(session: Dict, data_path: str, modifications: Optional[str] = None) -> Dict:
@@ -1976,14 +2110,23 @@ async def generate_report(session_id: str):
         
         # 同时生成 HTML 版本
         html_report = report_generator.export_to_html(report)
-        
+
+        # 生成 JSON 摘要
+        summary = report_generator.generate_summary_json(
+            data_path=data_path,
+            target_column=target_column,
+            task_type=task_type
+        )
+
         return {
             "success": True,
             "message": "报告已生成",
             "downloads": {
                 "markdown": f"/assets/{session_id}/reports/modeling_report.md",
-                "html": f"/assets/{session_id}/reports/modeling_report.html"
-            }
+                "html": f"/assets/{session_id}/reports/modeling_report.html",
+                "summary": f"/assets/{session_id}/reports/summary.json"
+            },
+            "summary": summary,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -2020,6 +2163,169 @@ async def generate_pipeline(session_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Session CRUD ====================
+
+SESSION_TTL_HOURS = int(os.environ.get("AUTOML_SESSION_TTL_HOURS", "72"))
+
+
+@app.get("/sessions")
+async def list_sessions():
+    """列出所有会话（合并内存态和磁盘态）"""
+    sessions_info = {}
+
+    # 从磁盘扫描
+    assets_dir = Path("assets")
+    if assets_dir.exists():
+        for d in assets_dir.iterdir():
+            if d.is_dir() and (d / "state" / "workflow_state.json").exists():
+                sid = d.name
+                try:
+                    with open(d / "state" / "workflow_state.json", "r") as f:
+                        state_data = json.load(f)
+                    sessions_info[sid] = {
+                        "session_id": sid,
+                        "current_stage": state_data.get("current_stage", "unknown"),
+                        "last_updated": state_data.get("last_updated", ""),
+                        "created_at": state_data.get("history", [{}])[0].get("timestamp", "") if state_data.get("history") else "",
+                    }
+                except Exception:
+                    sessions_info[sid] = {
+                        "session_id": sid,
+                        "current_stage": "unknown",
+                        "last_updated": "",
+                        "created_at": "",
+                    }
+
+    # 合并内存态
+    for sid, sess in _sessions.items():
+        ws = sess.get("workflow_state")
+        if ws:
+            sessions_info[sid] = {
+                "session_id": sid,
+                "current_stage": ws.current_stage.value if ws.current_stage else "unknown",
+                "last_updated": ws.last_updated if hasattr(ws, "last_updated") else "",
+                "created_at": sess.get("created_at", ""),
+            }
+        elif sid not in sessions_info:
+            sessions_info[sid] = {
+                "session_id": sid,
+                "current_stage": "unknown",
+                "last_updated": "",
+                "created_at": sess.get("created_at", ""),
+            }
+
+    return {
+        "success": True,
+        "sessions": list(sessions_info.values()),
+        "count": len(sessions_info),
+    }
+
+
+@app.get("/sessions/{session_id}/status")
+async def get_session_detail(session_id: str):
+    """获取完整会话状态详情"""
+    session = get_session(session_id)
+    ws = session.get("workflow_state")
+    if not ws:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    cm = session.get("confirmation_manager")
+    agents_keys = list(session.get("agents", {}).keys())
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "current_stage": ws.current_stage.value if ws.current_stage else "unknown",
+        "context": ws.context,
+        "history": ws.history[-20:],
+        "agents_loaded": agents_keys,
+        "confirmation_state": cm.to_dict() if cm else None,
+        "created_at": session.get("created_at", ""),
+    }
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, confirm: bool = False):
+    """删除会话及所有关联资产"""
+    if not confirm:
+        return {
+            "success": False,
+            "message": "请添加 ?confirm=true 确认删除",
+            "session_id": session_id,
+        }
+
+    # 清除内存态
+    if session_id in _sessions:
+        del _sessions[session_id]
+
+    # 清除磁盘文件
+    session_dir = Path("assets") / session_id
+    if session_dir.exists():
+        shutil.rmtree(session_dir)
+
+    return {
+        "success": True,
+        "message": f"会话 {session_id} 已删除",
+        "session_id": session_id,
+    }
+
+
+# ==================== Report Summary ====================
+
+@app.get("/report/{session_id}/summary")
+async def get_report_summary(session_id: str):
+    """获取结构化 JSON 摘要"""
+    asset_manager = get_asset_manager(session_id=session_id)
+    summary_json = asset_manager.read_asset("reports", "summary.json")
+    if not summary_json:
+        raise HTTPException(status_code=404, detail="摘要报告尚未生成")
+    try:
+        return json.loads(summary_json)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="摘要报告格式错误")
+
+
+# ==================== TTL Cleanup ====================
+
+def _cleanup_expired_sessions():
+    """清理过期的会话目录"""
+    assets_dir = Path("assets")
+    if not assets_dir.exists():
+        return
+
+    cutoff = datetime.now() - timedelta(hours=SESSION_TTL_HOURS)
+    cleaned = 0
+
+    for d in assets_dir.iterdir():
+        if not d.is_dir():
+            continue
+        state_file = d / "state" / "workflow_state.json"
+        if not state_file.exists():
+            continue
+        try:
+            with open(state_file, "r") as f:
+                state_data = json.load(f)
+            last_updated = state_data.get("last_updated", "")
+            if last_updated and datetime.fromisoformat(last_updated) < cutoff:
+                sid = d.name
+                if sid in _sessions:
+                    del _sessions[sid]
+                shutil.rmtree(d)
+                cleaned += 1
+                print(f"[API] 清理过期会话: {sid}")
+        except Exception:
+            continue
+
+    if cleaned:
+        print(f"[API] TTL 清理完成，共清理 {cleaned} 个过期会话")
+
+
+@app.on_event("startup")
+async def on_startup():
+    """应用启动时清理过期会话"""
+    _cleanup_expired_sessions()
 
 
 if __name__ == "__main__":

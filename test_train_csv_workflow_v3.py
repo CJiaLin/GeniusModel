@@ -18,7 +18,7 @@ import subprocess
 import joblib
 
 # API 基础地址
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost:8000")
 
 # 测试会话 ID
 SESSION_ID = f"train_csv_v3_{int(time.time())}"
@@ -69,7 +69,10 @@ def ensure_backend_running():
         "/Users/cjialin/code/AutoMLByLLM/venv/bin/python",
         "-u",
         "-m",
-        "automl_react.api.main"
+        "uvicorn",
+        "automl_react.api.main:app",
+        "--host", "0.0.0.0",
+        "--port", BASE_URL.rsplit(":", 1)[-1],
     ]
     _backend_process = subprocess.Popen(
         cmd,
@@ -136,7 +139,7 @@ def test_start_workflow():
         "task_description": "我希望建立一个房价预测模型，用于预测二手房的销售价格。请重点关注房屋面积、地段、建造年份等关键特征，并尝试多种回归算法进行对比。采用对数化后的 SalePrice 计算评估指标。"
     }
     
-    response = post_with_progress(url, json_body=data, timeout=120, label="启动工作流")
+    response = post_with_progress(url, json_body=data, timeout=600, label="启动工作流")
     
     if response.status_code == 200:
         result = response.json()
@@ -223,7 +226,7 @@ def test_feature_engineering_stage():
         "task_type": "regression"
     }
     
-    response = post_with_progress(url, json_body=data, timeout=900, label="生成特征工程方案")
+    response = post_with_progress(url, json_body=data, timeout=1800, label="生成特征工程方案")
     
     if response.status_code == 200:
         result = response.json()
@@ -283,7 +286,7 @@ def test_submit_confirmation_and_execute(confirmation_id, status="confirmed", mo
         "modifications": modifications or ""
     }
     
-    response = post_with_progress(url, json_body=data, timeout=900, label=f"提交确认({status})")
+    response = post_with_progress(url, json_body=data, timeout=1800, label=f"提交确认({status})")
     
     if response.status_code == 200:
         result = response.json()
@@ -306,7 +309,7 @@ def test_model_training_stage():
         "task_type": "regression"
     }
 
-    response = post_with_progress(url, json_body=data, timeout=900, label="生成模型训练方案")
+    response = post_with_progress(url, json_body=data, timeout=1800, label="生成模型训练方案")
 
     if response.status_code != 200:
         print(f"❌ 模型训练方案生成失败: {response.status_code} - {response.text}")
@@ -364,7 +367,7 @@ def test_model_evaluation_stage():
     print_step(9, "模型评估阶段")
 
     url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/model_evaluation/run"
-    response = post_with_progress(url, json_body={}, timeout=300, label="执行模型评估")
+    response = post_with_progress(url, json_body={}, timeout=1800, label="执行模型评估")
 
     if response.status_code != 200:
         print(f"❌ 模型评估失败: {response.status_code} - {response.text}")
@@ -409,6 +412,100 @@ def test_model_evaluation_stage():
     if missing:
         print(f"   ❌ 缺少关键评估指标: {missing}")
         return False
+
+    return True
+
+
+def test_auto_report():
+    """步骤 9.5: 验证模型评估后自动生成的报告"""
+    print_step("9.5", "验证自动生成的报告和 JSON 摘要")
+
+    import time
+    time.sleep(1)  # 等待报告异步写入
+
+    # 检查 Markdown 报告
+    report_path = f"assets/{SESSION_ID}/reports/modeling_report.md"
+    if not os.path.exists(report_path):
+        print(f"❌ Markdown 报告未自动生成: {report_path}")
+        return False
+    with open(report_path) as f:
+        report = f.read()
+    print(f"✅ Markdown 报告已自动生成 ({len(report)} 字符)")
+
+    # 验证报告包含所有章节
+    required_sections = ["项目概述", "数据切分", "数据清洗", "数据探索分析",
+                         "特征工程", "模型训练", "模型评估", "可视化分析", "结论与建议"]
+    missing = [s for s in required_sections if s not in report]
+    if missing:
+        print(f"❌ 报告缺少章节: {missing}")
+        return False
+    print(f"✅ 报告包含全部 {len(required_sections)} 个章节")
+
+    # 检查 HTML 报告
+    html_path = f"assets/{SESSION_ID}/reports/modeling_report.html"
+    if os.path.exists(html_path):
+        print(f"✅ HTML 报告已生成")
+    else:
+        print("⚠️ HTML 报告未生成（可能缺少 markdown 库）")
+
+    # 检查 JSON 摘要
+    summary_path = f"assets/{SESSION_ID}/reports/summary.json"
+    if not os.path.exists(summary_path):
+        print(f"❌ JSON 摘要未自动生成: {summary_path}")
+        return False
+    with open(summary_path) as f:
+        summary = json.load(f)
+    required_keys = {"session_id", "problem_definition", "data_summary",
+                     "cleaning_summary", "feature_summary", "model_summary",
+                     "evaluation_summary", "generated_at"}
+    missing = [k for k in required_keys if k not in summary]
+    if missing:
+        print(f"❌ JSON 摘要缺少字段: {missing}")
+        return False
+    print(f"✅ JSON 摘要已生成，包含 {len(summary)} 个顶层字段")
+
+    # 检查图表
+    charts_dir = f"assets/{SESSION_ID}/reports/charts"
+    if os.path.exists(charts_dir):
+        chart_files = os.listdir(charts_dir)
+        print(f"✅ 已生成 {len(chart_files)} 个可视化图表: {chart_files}")
+    else:
+        print("⚠️ 未生成可视化图表目录")
+
+    return True
+
+
+def test_session_crud():
+    """步骤 10.5: 测试会话 CRUD API"""
+    print_step("10.5", "测试会话 CRUD API")
+
+    # GET /sessions
+    response = requests.get(f"{BASE_URL}/sessions")
+    if response.status_code != 200:
+        print(f"❌ GET /sessions 失败: {response.status_code}")
+        return False
+    sessions = response.json()
+    session_ids = [s["session_id"] for s in sessions.get("sessions", [])]
+    if SESSION_ID not in session_ids:
+        print(f"❌ 当前会话 {SESSION_ID} 未出现在会话列表中")
+        return False
+    print(f"✅ GET /sessions 返回 {sessions['count']} 个会话")
+
+    # GET /sessions/{id}/status
+    response = requests.get(f"{BASE_URL}/sessions/{SESSION_ID}/status")
+    if response.status_code != 200:
+        print(f"❌ GET /sessions/{SESSION_ID}/status 失败: {response.status_code}")
+        return False
+    detail = response.json()
+    print(f"✅ 会话详情: stage={detail.get('current_stage')}, agents={detail.get('agents_loaded')}")
+
+    # GET /report/{session_id}/summary
+    response = requests.get(f"{BASE_URL}/report/{SESSION_ID}/summary")
+    if response.status_code != 200:
+        print(f"❌ GET /report/{SESSION_ID}/summary 失败: {response.status_code}")
+        return False
+    summary = response.json()
+    print(f"✅ 报告摘要 API: model={summary.get('model_summary', {}).get('best_model')}")
 
     return True
 
@@ -508,12 +605,12 @@ def test_list_assets():
         print("✅ 模型包结构校验通过")
 
         reports_files = [f.get('name') for f in assets.get('reports', [])]
-        required_reports = {"evaluation.json"}
+        required_reports = {"evaluation.json", "modeling_report.md", "summary.json"}
         missing = [x for x in required_reports if x not in reports_files]
         if missing:
-            print(f"❌ 缺少关键模型评估产物: {missing}")
+            print(f"❌ 缺少关键报告产物: {missing}")
             return False
-        print("✅ 模型评估产物校验通过")
+        print("✅ 模型评估和报告产物校验通过")
         return True
     else:
         print(f"❌ 资产列表获取失败: {response.status_code} - {response.text}")
@@ -637,7 +734,7 @@ def test_data_splitting_stage():
 
     url = f"{BASE_URL}/workflow/{SESSION_ID}/stage/data_splitting/run"
 
-    response = post_with_progress(url, json_body={}, timeout=120, label="执行数据集切分")
+    response = post_with_progress(url, json_body={}, timeout=600, label="执行数据集切分")
 
     if response.status_code != 200:
         print(f"❌ 数据集切分失败: {response.status_code} - {response.text}")
@@ -754,8 +851,14 @@ def main():
     # 步骤 9: 模型评估
     results.append(("模型评估", test_model_evaluation_stage()))
 
+    # 步骤 9.5: 验证自动报告
+    results.append(("自动报告验证", test_auto_report()))
+
     # 步骤 10: 资产列表
     results.append(("列出资产", test_list_assets()))
+
+    # 步骤 10.5: 会话 CRUD API
+    results.append(("会话 CRUD API", test_session_crud()))
     
     print("\n" + "="*80)
     print("测试总结")

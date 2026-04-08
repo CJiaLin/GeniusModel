@@ -2,5 +2,16 @@
   "ownerId": "kn76xhdy26wp3h8djks2hnskj18130kg",
   "slug": "afrexai-ml-engineering",
   "version": "1.0.0",
-  "publishedAt": 1771504209669
+  "publishedAt": 1771504209669,
+  "tags": ["ml-engineering", "feature-engineering", "model-training", "experiment-management", "deployment"],
+  "summary": "端到端ML工程技能包，涵盖问题定义、数据工程、实验管理、模型评估、部署和监控",
+  "sections": {
+    "overview": "SKILL.md",
+    "phase1-problem-framing": "SKILL.md#Phase 1",
+    "phase2-data-engineering": "SKILL.md#Phase 2",
+    "phase3-experiment-management": "SKILL.md#Phase 3",
+    "phase4-model-evaluation": "SKILL.md#Phase 4",
+    "phase5-deployment": "SKILL.md#Phase 5",
+    "readme": "README.md"
+  }
 }

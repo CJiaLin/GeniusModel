@@ -12,7 +12,6 @@ from datetime import datetime
 
 from ..core.react_agent import ReActAgent
 from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
-from ..skills_loader import get_skill_loader
 from ..config import get_config_loader
 from ..logger.llm_logger import LLMLogger
 
@@ -40,14 +39,17 @@ class DataAnalysisAgent(ReActAgent):
         self.analysis_result: Optional[str] = None
         self.problem_definition_plan: Optional[str] = None
         self.problem_definition_payload: Optional[Dict[str, Any]] = None
-        self.skill_loader = get_skill_loader()
         self.config_loader = get_config_loader()
         self.logger = LLMLogger(session_id=session_id)
 
     def _register_default_tools(self):
         """注册默认工具"""
+        super()._register_default_tools()
+        from ..tools.data_tools import DataLoaderTool, DataAnalyzerTool
+        from ..tools.profile_tools import DataProfileTool
         self.register_tool("load_data", DataLoaderTool())
         self.register_tool("analyze_data", DataAnalyzerTool())
+        self.register_tool("profile_data", DataProfileTool())
 
     def get_system_prompt(self) -> str:
         """获取系统提示词"""
@@ -130,18 +132,6 @@ class DataAnalysisAgent(ReActAgent):
             self.data_info = None
             return f"无法加载数据文件: {data_path}\n错误: {exc}"
 
-    def _get_problem_definition_skill_content(self) -> str:
-        """拼接问题定义阶段可复用的技能参考。"""
-        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
-        pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
-
-        skill_content = ""
-        if techniques:
-            skill_content += f"## 数据分析技术参考\n\n{techniques[:1500]}\n\n"
-        if pitfalls:
-            skill_content += f"## 数据陷阱参考\n\n{pitfalls[:1500]}\n\n"
-        return skill_content
-
     def _build_default_problem_definition(
         self,
         target_column: Optional[str],
@@ -222,7 +212,6 @@ class DataAnalysisAgent(ReActAgent):
         user_input = prompt_template.format(
             task_context=task_context,
             current_data_context=self._collect_data_context(data_path, target_column, task_type),
-            skill_content=self._get_problem_definition_skill_content(),
             candidate_target_column=target_column or "未提供",
             candidate_task_type=task_type or "未提供",
             output_schema_json=json.dumps(output_schema, ensure_ascii=False, indent=2),
@@ -312,17 +301,6 @@ class DataAnalysisAgent(ReActAgent):
         except Exception as e:
             current_data_context = f"无法加载数据文件: {data_path}\n错误: {str(e)}"
 
-        # 加载 data-analysis skill 内容
-        techniques = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "techniques.md")
-        pitfalls = self.skill_loader.get_skill_reference("data-analysis-1.0.2", "pitfalls.md")
-
-        # 构建 skill 内容
-        skill_content = ""
-        if techniques:
-            skill_content += f"## 数据分析技术参考\n\n{techniques[:1500]}\n\n"
-        if pitfalls:
-            skill_content += f"## 数据陷阱参考\n\n{pitfalls[:1500]}\n\n"
-
         # 构建用户提示词
         task_context = ""
         if task_description:
@@ -339,7 +317,6 @@ class DataAnalysisAgent(ReActAgent):
         user_input = prompt_template.format(
             task_context=task_context,
             current_data_context=current_data_context,
-            skill_content=skill_content,
         )
 
         # 调用 LLM 生成报告

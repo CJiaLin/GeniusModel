@@ -98,6 +98,14 @@ class ReActAgent(ABC):
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """获取所有工具的 schema"""
         return [tool.get_schema() for tool in self.tools.values()]
+
+    def revise_plan(self, current_plan: str, modifications: str, **kwargs) -> str:
+        """基于用户反馈修订方案。子类应实现。"""
+        raise NotImplementedError("Subclass must implement revise_plan")
+
+    def get_modifiable_aspects(self) -> List[str]:
+        """返回当前阶段可修改的维度提示"""
+        return []
     
     @abstractmethod
     def get_system_prompt(self) -> str:
@@ -148,14 +156,20 @@ class ReActAgent(ABC):
 
 你必须按照以下格式进行思考和行动：
 
-思考: 分析当前情况，决定下一步行动
+思考: [分析已知信息、待确认信息，说明选择下一步行动的理由]
 行动: 工具名称
 行动输入: {{"参数名": "参数值"}}
 观察: 等待工具执行结果
 
 当任务完成时，输出：
-思考: 任务已完成
-最终答案: 你的回答
+思考: [总结关键发现和结论]
+最终答案: 你的完整回答
+
+## 效率要求
+
+- 每次"思考"应明确你已知什么、还需要什么、为什么选择这个行动
+- 尽量在最少的迭代次数内完成任务
+- 如果一个工具调用能获取多个信息，优先使用它而非多次调用
 """
 
         memory_context = self.memory.get_short_term_context(
@@ -557,8 +571,10 @@ class ReActAgent(ABC):
         }
     
     def _register_default_tools(self):
-        """注册默认工具（子类可覆盖）"""
-        pass
+        """注册默认工具（子类应调用 super()._register_default_tools()）"""
+        from ..tools.skill_tools import SkillSearchTool, SkillReadTool
+        self.register_tool("search_skills", SkillSearchTool())
+        self.register_tool("read_skill", SkillReadTool())
     
     def reset(self):
         """重置 Agent 状态"""

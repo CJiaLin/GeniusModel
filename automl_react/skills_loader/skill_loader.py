@@ -6,6 +6,7 @@ Skill 加载器模块
 
 import os
 import json
+import re
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -32,6 +33,9 @@ class Skill:
     meta: Dict[str, Any] = field(default_factory=dict)
     content: str = ""
     references: Dict[str, str] = field(default_factory=dict)
+    tags: List[str] = field(default_factory=list)
+    summary: str = ""
+    sections: Dict[str, str] = field(default_factory=dict)
 
     def get_reference(self, filename: str) -> Optional[str]:
         """获取指定参考文件内容"""
@@ -196,7 +200,10 @@ class SkillLoader:
             path=skill_path,
             meta=meta,
             content=content,
-            references=references
+            references=references,
+            tags=meta.get("tags", []),
+            summary=meta.get("summary", ""),
+            sections=meta.get("sections", {}),
         )
 
         self._skills[skill_name] = skill
@@ -277,25 +284,144 @@ class SkillLoader:
         Returns:
             匹配的 skill 名称列表
         """
+        self.load_all_skills()
         results = []
+        kw = keyword.lower()
 
         for name, skill in self._skills.items():
-            # 检查名称
-            if keyword.lower() in name.lower():
+            if kw in name.lower():
                 results.append(name)
                 continue
-
-            # 检查描述
-            if keyword.lower() in skill.description.lower():
+            if skill.summary and kw in skill.summary.lower():
                 results.append(name)
                 continue
-
-            # 检查内容
-            if keyword.lower() in skill.content.lower():
+            if skill.description and kw in skill.description.lower():
+                results.append(name)
+                continue
+            if any(kw in tag.lower() for tag in skill.tags):
+                results.append(name)
+                continue
+            if kw in skill.content.lower():
                 results.append(name)
                 continue
 
         return results
+
+    def get_skill_summary(self, skill_name: str) -> Optional[str]:
+        """
+        获取 skill 摘要
+
+        Args:
+            skill_name: Skill 名称
+
+        Returns:
+            摘要文本
+        """
+        skill = self.get_skill(skill_name)
+        if not skill:
+            return None
+        if skill.summary:
+            return skill.summary
+        # 回退：取 SKILL.md 前 200 字符
+        if skill.content:
+            return skill.content[:200].strip()
+        return skill.description or skill.name
+
+    def search_by_tags(self, tags: List[str]) -> List[str]:
+        """
+        按标签搜索 skill
+
+        Args:
+            tags: 标签列表
+
+        Returns:
+            匹配的 skill 名称列表
+        """
+        self.load_all_skills()
+        results = []
+        search_tags = [t.lower() for t in tags]
+
+        for name, skill in self._skills.items():
+            skill_tags = [t.lower() for t in skill.tags]
+            if any(st in skill_tags for st in search_tags):
+                results.append(name)
+
+        return results
+
+    def list_sections(self, skill_name: str) -> Optional[Dict[str, str]]:
+        """
+        列出 skill 的所有章节
+
+        Args:
+            skill_name: Skill 名称
+
+        Returns:
+            章节字典 {section_key: file_reference}
+        """
+        skill = self.get_skill(skill_name)
+        if not skill:
+            return None
+        return skill.sections if skill.sections else {"overview": "SKILL.md"}
+
+    def get_section_content(self, skill_name: str, section_key: str) -> Optional[str]:
+        """
+        获取 skill 指定章节的内容
+
+        支持两种格式：
+        - 直接文件引用: "techniques.md"
+        - SKILL.md 内章节引用: "SKILL.md#Phase 2"
+
+        Args:
+            skill_name: Skill 名称
+            section_key: 章节键名
+
+        Returns:
+            章节内容文本
+        """
+        skill = self.get_skill(skill_name)
+        if not skill:
+            return None
+
+        sections = skill.sections or {}
+        file_ref = sections.get(section_key)
+
+        if not file_ref:
+            # 尝试直接作为文件名查找
+            return skill.get_reference(section_key)
+
+        # 处理 SKILL.md#Phase X 格式
+        if "#" in file_ref:
+            base_file, anchor = file_ref.split("#", 1)
+            if base_file == "SKILL.md":
+                content = skill.content
+            else:
+                content = skill.get_reference(base_file)
+
+            if not content:
+                return None
+
+            # 正则提取章节 (匹配 ## Phase X: ... 到下一个同级标题)
+            pattern = rf'##?\s*{re.escape(anchor)}[\s:：].*?\n(.*?)(?=\n##?\s*Phase\s|\Z)'
+            match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+            if match:
+                return match.group(0).strip()
+            return None
+
+        # 普通文件引用
+        if file_ref == "SKILL.md":
+            return skill.content
+
+        # 在 references 中查找（支持精确匹配和文件名匹配）
+        ref = skill.get_reference(file_ref)
+        if ref:
+            return ref
+
+        # 尝试只匹配文件名部分
+        for ref_key, ref_content in skill.references.items():
+            if ref_key.endswith(file_ref) or file_ref.endswith(ref_key):
+                return ref_content
+
+        return None
 
     def reload_skill(self, skill_name: str) -> Skill:
         """

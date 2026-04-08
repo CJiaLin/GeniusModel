@@ -2,5 +2,15 @@
   "ownerId": "kn73vp5rarc3b14rc7wjcw8f8580t5d1",
   "slug": "data-analysis",
   "version": "1.0.2",
-  "publishedAt": 1773241910484
+  "publishedAt": 1773241910484,
+  "tags": ["data-analysis", "data-quality", "visualization", "statistical-analysis"],
+  "summary": "数据分析与可视化技能包，包含数据分析技术、常见陷阱、图表选择和指标定义等参考",
+  "sections": {
+    "techniques": "techniques.md",
+    "pitfalls": "pitfalls.md",
+    "chart-selection": "chart-selection.md",
+    "decision-briefs": "decision-briefs.md",
+    "metric-contracts": "metric-contracts.md",
+    "overview": "SKILL.md"
+  }
 }

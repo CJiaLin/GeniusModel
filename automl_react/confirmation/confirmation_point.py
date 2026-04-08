@@ -7,6 +7,8 @@ and timeout handling.
 """
 
 import asyncio
+import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -22,6 +24,7 @@ class ConfirmationStatus(Enum):
     MODIFIED = "modified"     # User provided modifications
     SKIPPED = "skipped"       # User skipped this confirmation point
     REJECTED = "rejected"     # User rejected the proposal
+    REVISION_REQUESTED = "revision_requested"  # User requested plan revision
 
 
 @dataclass
@@ -68,6 +71,8 @@ class UserConfirmationPoint:
     created_at: datetime = field(default_factory=datetime.now)
     timeout_seconds: Optional[float] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    revision_history: List[Dict[str, Any]] = field(default_factory=list)
+    modifiable_aspects: List[str] = field(default_factory=list)
 
     def is_resolved(self) -> bool:
         """Check if the confirmation point has been resolved."""
@@ -132,7 +137,9 @@ class UserConfirmationPoint:
             } if self.user_response else None,
             "created_at": self.created_at.isoformat(),
             "timeout_seconds": self.timeout_seconds,
-            "metadata": self.metadata
+            "metadata": self.metadata,
+            "revision_history": self.revision_history,
+            "modifiable_aspects": self.modifiable_aspects,
         }
 
     @classmethod
@@ -168,7 +175,9 @@ class UserConfirmationPoint:
             user_response=user_response,
             created_at=datetime.fromisoformat(data["created_at"]),
             timeout_seconds=data.get("timeout_seconds"),
-            metadata=data.get("metadata", {})
+            metadata=data.get("metadata", {}),
+            revision_history=data.get("revision_history", []),
+            modifiable_aspects=data.get("modifiable_aspects", []),
         )
 
 
@@ -193,13 +202,14 @@ class ConfirmationManager:
     - Manage confirmation point lifecycle
     """
 
-    def __init__(self):
+    def __init__(self, save_path: Optional[str] = None):
         self._queue: List[UserConfirmationPoint] = []
         self._current: Optional[UserConfirmationPoint] = None
         self._history: List[UserConfirmationPoint] = []
         self._waiting_event: Optional[asyncio.Event] = None
         self._response_callbacks: List[Callable[[UserConfirmationPoint], None]] = []
         self._timeout_callbacks: List[Callable[[UserConfirmationPoint], None]] = []
+        self._save_path: Optional[str] = save_path
 
     @property
     def current(self) -> Optional[UserConfirmationPoint]:
@@ -248,6 +258,7 @@ class ConfirmationManager:
             metadata=metadata or {}
         )
         self._queue.append(point)
+        self._auto_save()
         return point
 
     def add_response_callback(
@@ -355,6 +366,7 @@ class ConfirmationManager:
         for callback in self._response_callbacks:
             callback(point)
 
+        self._auto_save()
         return True
 
     def modify_and_retry(
@@ -474,6 +486,35 @@ class ConfirmationManager:
         self._history = [UserConfirmationPoint.from_dict(p) for p in data.get("history", [])]
         current_data = data.get("current")
         self._current = UserConfirmationPoint.from_dict(current_data) if current_data else None
+
+    def save(self, path: Optional[str] = None) -> None:
+        """Persist manager state to JSON file."""
+        save_path = path or self._save_path
+        if not save_path:
+            return
+        data = self.to_dict()
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        with open(save_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def load_from_disk(cls, path: str) -> Optional['ConfirmationManager']:
+        """Load ConfirmationManager from a JSON file. Returns None if file doesn't exist."""
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            mgr = cls(save_path=path)
+            mgr.from_dict(data)
+            return mgr
+        except (json.JSONDecodeError, KeyError):
+            return None
+
+    def _auto_save(self) -> None:
+        """Auto-save if save_path is configured."""
+        if self._save_path:
+            self.save()
 
     def _find_point_by_id(self, point_id: str) -> Optional[UserConfirmationPoint]:
         """Find a confirmation point by ID."""

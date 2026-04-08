@@ -604,6 +604,7 @@
                 const data = await response.json();
 
                 if (data.success) {
+                    window._currentModifiableAspects = data.modifiable_aspects || [];
                     displayProposal(stage, data.proposal);
                     currentConfirmationId = data.confirmation_id || '';
                 } else {
@@ -647,23 +648,89 @@
             actionsDiv.innerHTML = `
                 <div class="confirmation-actions">
                     <button class="btn btn-success" onclick="submitConfirmation('confirmed')">确认执行</button>
-                    <button class="btn btn-warning" onclick="submitConfirmation('modified')">修改方案</button>
+                    <button class="btn btn-warning" onclick="showRevisionPanel()">修改方案</button>
                     <button class="btn btn-secondary" onclick="submitConfirmation('skipped')">跳过此步骤</button>
                 </div>
+                <div id="revision-panel" style="display: none; margin-top: 15px;">
+                    <div id="modifiable-aspects" style="margin-bottom: 8px;"></div>
+                    <textarea id="revision-input" rows="4" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;" placeholder="请输入您的修改要求..."></textarea>
+                    <div style="margin-top: 8px;">
+                        <button class="btn btn-primary" onclick="submitRevision()">提交修改</button>
+                        <button class="btn btn-secondary" onclick="hideRevisionPanel()">取消</button>
+                        <span id="revision-round" style="margin-left: 10px; color: #888; font-size: 12px;"></span>
+                    </div>
+                </div>
             `;
+
+            // 显示可修改维度提示
+            if (window._currentModifiableAspects && window._currentModifiableAspects.length > 0) {
+                const aspectsDiv = document.getElementById('modifiable-aspects');
+                aspectsDiv.innerHTML = '<span style="color: #666; font-size: 12px;">可修改维度: </span>' +
+                    window._currentModifiableAspects.map(a => `<span style="display: inline-block; padding: 2px 8px; margin: 2px; background: #e8f0fe; border-radius: 12px; font-size: 12px; color: #1a73e8;">${a}</span>`).join('');
+            }
 
             // 清空加载状态
             document.getElementById(`${stage.replace('_', '-')}-content`).innerHTML = '';
         }
 
+        // 显示/隐藏修订面板
+        function showRevisionPanel() {
+            document.getElementById('revision-panel').style.display = 'block';
+            document.getElementById('revision-input').focus();
+        }
+        function hideRevisionPanel() {
+            document.getElementById('revision-panel').style.display = 'none';
+            document.getElementById('revision-input').value = '';
+        }
+
+        // 提交方案修订
+        async function submitRevision() {
+            const modifications = document.getElementById('revision-input').value.trim();
+            if (!modifications) return;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/confirmation/revise`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        confirmation_id: currentConfirmationId,
+                        modifications: modifications
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    // 更新确认ID和方案显示
+                    currentConfirmationId = data.confirmation_id;
+                    window._currentModifiableAspects = data.modifiable_aspects || [];
+
+                    // 更新方案内容
+                    const proposalDiv = document.getElementById('confirmation-proposal');
+                    proposalDiv.innerHTML = marked.parse(data.proposal);
+                    proposalDiv.querySelectorAll('pre code').forEach((block) => {
+                        hljs.highlightBlock(block);
+                    });
+
+                    // 更新修订轮次
+                    const roundSpan = document.getElementById('revision-round');
+                    if (roundSpan && data.revision_round) {
+                        roundSpan.textContent = `第 ${data.revision_round} 轮修订`;
+                    }
+
+                    // 清空输入并隐藏面板
+                    hideRevisionPanel();
+                } else {
+                    alert('修订失败: ' + (data.error || data.detail || '未知错误'));
+                }
+            } catch (error) {
+                alert('修订请求失败: ' + error.message);
+            }
+        }
+
         // 提交确认
         async function submitConfirmation(status) {
             let modifications = null;
-            
-            if (status === 'modified') {
-                modifications = prompt('请输入您的修改要求:');
-                if (!modifications) return;
-            }
 
             try {
                 const response = await fetch(`${API_BASE_URL}/confirmation/submit`, {
