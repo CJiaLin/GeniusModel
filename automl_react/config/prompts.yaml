@@ -41,10 +41,11 @@ data_cleaning:
 
     <reasoning_steps>
     请按以下步骤推理生成方案：
-    1. 审视质量报告中列出的每个问题，判断其严重程度和对建模的影响
-    2. 按优先级排序：影响模型正确性的问题 > 影响模型性能的问题 > 影响数据美观的问题
-    3. 为每个问题选择适合的清洗方法——本阶段仅用无状态方法（中位数填充、IQR 截断等），复杂方法（KNN 填充、基于模型的检测等）留给后续阶段
-    4. 评估每个清洗操作对增量数据的适用性
+    1. **学习领域知识（必做）**：直接使用 `read_skill` 工具（不要用 search_skills）分别读取 `data-analysis-1.0.2` 的 `techniques` 和 `pitfalls` 章节，获取完整的方法论内容后再进行方案设计
+    2. 审视质量报告中列出的每个问题，结合 skill 知识判断其严重程度和对建模的影响
+    3. 按优先级排序：影响模型正确性的问题 > 影响模型性能的问题 > 影响数据美观的问题
+    4. 为每个问题选择适合的清洗方法——本阶段仅用无状态方法（中位数填充、IQR 截断等），复杂方法（KNN 填充、基于模型的检测等）留给后续阶段
+    5. 评估每个清洗操作对增量数据的适用性
     </reasoning_steps>
 
     <output_format>
@@ -66,7 +67,8 @@ data_cleaning:
   code_generation_full: |
     <context>
     任务: {task_context}
-    数据路径: {data_path}
+    默认输入路径: {data_path}
+    默认输出路径: {cleaned_data_path}
     数据信息: {data_info_text}
 
     清洗方案:
@@ -76,21 +78,35 @@ data_cleaning:
     </context>
 
     <output_contract>
-    必须生成的文件: {cleaned_data_path}（CSV 格式，保留列结构）
+    代码必须通过 sys.argv 接收输入输出路径，不得硬编码路径：
+    - sys.argv[1]: 输入数据路径（默认: {data_path}）
+    - sys.argv[2]: 输出数据路径（默认: {cleaned_data_path}）
     必须输出的统计: 清洗前后行数/列数对比
     </output_contract>
 
     <requirements>
-    1. 使用 pandas 进行数据处理，代码完整可执行，包含所有必要导入
-    2. 使用实际数据的列名，从 {data_path} 读取数据
-    3. 保存清洗后的数据到: {cleaned_data_path}
+    1. 代码开头必须使用以下模式获取路径（第一行可执行代码）:
+       import sys
+       input_path = sys.argv[1] if len(sys.argv) > 1 else "{data_path}"
+       output_path = sys.argv[2] if len(sys.argv) > 2 else "{cleaned_data_path}"
+    2. 使用 pandas 进行数据处理，代码完整可执行，包含所有必要导入
+    3. 从 input_path 读取数据，保存清洗后的数据到 output_path
     4. 本阶段仅用无状态清洗方法，复杂方法（如 KNN 填充）留给后续阶段
     5. 代码对增量数据也适用，不假设数据规模或分布不变
     6. 包含详细注释
+    7. 如果数据中存在 Id/ID/index 等标识列，必须在输出文件中保留
+    8. 代码格式约束：不要将代码包装在 def main() 中，不要使用 globals().update()，不要定义名为 clean_data 的函数（此名称由流水线框架保留），所有 import 必须写在单行（不要用括号换行）
     </requirements>
 
+    <reusability>
+    此代码将被复用于验证集和测试集的清洗（通过不同的 sys.argv 参数调用）。因此：
+    - 所有清洗参数（填充值、截断阈值等）必须硬编码为基于训练集计算的常量，不得从输入数据动态计算
+    - 代码必须是无状态的：相同逻辑对不同大小的输入数据都不应报错
+    - 不要在代码中读取其他文件，只处理 input_path 指定的单个文件
+    </reusability>
+
     <common_pitfalls>
-    - 保存前确保目录存在: os.makedirs(os.path.dirname(path), exist_ok=True)
+    - 保存前确保目录存在: os.makedirs(os.path.dirname(output_path), exist_ok=True)
     - 避免在空 DataFrame 上操作导致错误
     - 避免硬编码特定行索引或假设特定数据分布
     </common_pitfalls>
@@ -274,10 +290,11 @@ feature_engineering:
 
     <reasoning_steps>
     请按以下步骤推理：
-    1. 先使用 `load_data` 或 `analyze_data` 对 `{data_path}` 做实时校验，确认列名和数据规模
-    2. 比对前序探索阶段的分析结论，识别高价值特征和需要变换的特征
-    3. 对每个变换评估：是否增加预测信号？采用”替换式”还是”追加式”？
-    4. 检查方案是否保持目标变量不变
+    1. **学习领域知识（必做）**：直接使用 `read_skill` 工具（不要用 search_skills）读取 `afrexai-ml-engineering-1.0.0` 的 `phase2-data-engineering` 章节，获取完整的特征工程范式和最佳实践后再进行方案设计
+    2. 先使用 `load_data` 或 `analyze_data` 对 `{data_path}` 做实时校验，确认列名和数据规模
+    3. 比对前序探索阶段的分析结论，结合 skill 知识识别高价值特征和需要变换的特征
+    4. 对每个变换评估：是否增加预测信号？采用”替换式”还是”追加式”？
+    5. 检查方案是否保持目标变量不变
     </reasoning_steps>
 
     <output_format>
@@ -306,7 +323,8 @@ feature_engineering:
   code_generation_full: |
     <context>
     任务: {task_context}
-    数据路径: {data_path}
+    默认输入路径: {data_path}
+    默认输出路径: {features_data_path}
     目标列: {target_column}
     任务类型: {task_type}
 
@@ -319,22 +337,38 @@ feature_engineering:
     </context>
 
     <output_contract>
-    必须生成的文件: {features_data_path}（CSV 格式）
+    代码必须通过 sys.argv 接收输入输出路径，不得硬编码路径：
+    - sys.argv[1]: 输入数据路径（默认: {data_path}）
+    - sys.argv[2]: 输出数据路径（默认: {features_data_path}）
     必须输出的变量: 新生成的特征列表
     </output_contract>
 
     <requirements>
-    1. 使用 pandas 进行特征工程，可选用 scikit-learn、category_encoders 等库
-    2. 代码完整可执行，包含所有必要导入
-    3. 使用实际数据的列名，从 {data_path} 读取数据
-    4. 保存特征工程结果到: {features_data_path}
+    1. 代码开头必须使用以下模式获取路径（第一行可执行代码）:
+       import sys
+       input_path = sys.argv[1] if len(sys.argv) > 1 else "{data_path}"
+       output_path = sys.argv[2] if len(sys.argv) > 2 else "{features_data_path}"
+    2. 使用 pandas 进行特征工程，可选用 scikit-learn、category_encoders 等库
+    3. 代码完整可执行，包含所有必要导入
+    4. 从 input_path 读取数据，保存特征工程结果到 output_path
     5. 目标变量不做任何变换，保持原始值输出——变换由模型训练阶段决定
     6. 分类变量编码时考虑未见类别的处理（如 handle_unknown='ignore'）
     7. 包含详细注释
+    8. 如果数据中存在 Id/ID/index 等标识列，必须在输出文件中保留
+    9. 代码格式约束：不要将代码包装在 def main() 中，不要使用 globals().update()，不要定义名为 engineer_features 的函数（此名称由流水线框架保留），所有 import 必须写在单行（不要用括号换行）
     </requirements>
 
+    <reusability>
+    此代码将被复用于验证集和测试集（通过不同的 sys.argv 参数调用）。因此：
+    - 所有基于训练数据的统计量（目标编码均值、频率阈值等）必须硬编码为常量，不得从当前输入数据动态计算（防止数据泄漏）
+    - 不得对目标列做目标编码——验证集/测试集的目标列仅用于评估，不参与特征构建
+    - 使用 sklearn OneHotEncoder(handle_unknown='ignore') 或固定列列表进行独热编码，确保不同大小数据集产生相同的列结构
+    - 只处理 input_path 指定的单个输入文件，不要读取其他文件
+    - 代码必须兼容缺少目标列的输入数据（验证集/测试集场景）
+    </reusability>
+
     <common_pitfalls>
-    - 保存前确保目录存在: os.makedirs(os.path.dirname(path), exist_ok=True)
+    - 保存前确保目录存在: os.makedirs(os.path.dirname(output_path), exist_ok=True)
     - 编码分类变量时处理未见类别，避免推理阶段报错
     - 避免原始列和变换后列同时保留导致重复特征
     </common_pitfalls>
@@ -491,11 +525,12 @@ model_training:
 
     <reasoning_steps>
     请按以下步骤推理：
-    1. 确认训练输入文件是特征工程阶段的输出: {data_path}——不得回退到原始数据或清洗阶段数据
-    2. 确认目标变量及其与任务类型的匹配关系
-    3. 综合前序报告（探索性分析用于理解分布与背景，特征分析报告用于识别有效信号和已确认风险）；若某类报告缺失，说明”未提供该报告”
-    4. 根据数据特点选择模型家族，说明主推荐模型和对比基线
-    5. 定义评估指标和验证策略
+    1. **学习领域知识（必做）**：直接使用 `read_skill` 工具（不要用 search_skills）读取 `afrexai-ml-engineering-1.0.0` 的 `phase3-experiment-management` 章节，获取完整的模型选择和实验管理范式后再进行方案设计
+    2. 确认训练输入文件是特征工程阶段的输出: {data_path}——不得回退到原始数据或清洗阶段数据
+    3. 确认目标变量及其与任务类型的匹配关系
+    4. 综合前序报告和 skill 知识（探索性分析用于理解分布与背景，特征分析报告用于识别有效信号和已确认风险）；若某类报告缺失，说明”未提供该报告”
+    5. 根据数据特点选择模型家族，说明主推荐模型和对比基线
+    6. 定义评估指标和验证策略
     </reasoning_steps>
 
     <output_format>
@@ -554,22 +589,27 @@ model_training:
 
     <requirements>
     数据与特征：
-    1. 读取 {data_path}，基于实际列名动态构建训练输入，默认使用除目标列外的所有特征
-    2. 仅排除方案中明确列出的排除项（常量列、泄露特征），不自行额外过滤
-    3. 消费上游切分资产（train/valid/test），不得重新切分
+    1. 训练集、验证集、测试集已经过相同的清洗和特征工程预处理，列结构一致，直接从以下路径读取即可：
+       - 训练集: {train_split_path}
+       - 验证集: {valid_split_path}
+       - 测试集: {test_split_path}
+    2. 默认使用除目标列外的所有特征，仅排除方案中明确列出的排除项（常量列、泄露特征）；必须排除 Id/ID/index 等行标识列（它们与目标无因果关系，属于数据泄漏）
+    3. 不得重新切分数据，直接消费上述三个文件
     4. 如果数据含分类特征，用稳健方式处理（ColumnTransformer + OneHotEncoder、CatBoost 原生类别等）
     5. valid 只用于模型选择与调参，test 只用于最终评估
+    6. 若某个文件不存在或为空，安全跳过并记录日志（如无 valid 则用 test 做调参）
 
     模型保存：
-    6. 模型必须包装为 dict 保存到 {model_path}，至少包含键：model、selected_feature_names、target_transform、preprocessor（无预处理器时写 None）
-    7. 如果多模型对比，基于主验证指标选最佳模型，保存的模型必须与 training_summary 一致
+    7. 模型必须包装为 dict 保存到 {model_path}，至少包含键：model、selected_feature_names、target_transform、preprocessor（无预处理器时写 None）
+    8. 如果多模型对比，基于主验证指标选最佳模型，保存的模型必须与 training_summary 一致
 
     目标变量：
-    8. 如果对目标变量做变换（如 log1p），必须显式写出变换和逆变换逻辑，split 资产中目标列保持原始尺度
+    9. 如果对目标变量做变换（如 log1p），必须显式写出变换和逆变换逻辑，split 资产中目标列保持原始尺度
 
     代码质量：
-    9. 完整可执行，包含所有导入语句和详细注释
-    10. 方案中要排除的特征若在数据中不存在，安全跳过；目标列不存在则抛错
+    10. 完整可执行，包含所有导入语句和详细注释
+    11. 方案中要排除的特征若在数据中不存在，安全跳过；目标列不存在则抛错
+    12. 代码格式约束：不要将代码包装在 def main() 中，不要使用 globals().update()，所有 import 必须写在单行（不要用括号换行）
     </requirements>
 
     <output_contract>

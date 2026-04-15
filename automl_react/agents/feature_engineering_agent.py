@@ -289,7 +289,7 @@ class FeatureEngineeringAgent(ReActAgent):
 
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
-        self.features_data_path = str(self.asset_manager.session_dir / "data" / "features_data.csv")
+        self.features_data_path = str(self.asset_manager.session_dir / "data" / "features_train.csv")
 
         prompt_template = self.config_loader.get_prompt("feature_engineering", "code_generation_full")
         task_prompt = prompt_template.format(
@@ -310,7 +310,9 @@ class FeatureEngineeringAgent(ReActAgent):
             "data_path": self.data_path,
             "target_column": self.target_column,
             "task_type": self.task_type,
-            "feature_data_path": self.features_data_path
+            "feature_data_path": self.features_data_path,
+            "input_data_path": self.data_path,
+            "output_data_path": self.features_data_path,
         }
 
         # 生成代码并执行验证
@@ -364,28 +366,14 @@ class FeatureEngineeringAgent(ReActAgent):
         if len(non_target_cols) <= 0:
             return False, "特征工程输出缺少可用特征列"
 
-        # 行数校验：特征工程合并了 train/valid/test 三个拆分文件，
-        # 因此输出行数应等于三者之和，而非仅 data_path（train_raw）的行数。
+        # 行数校验：特征工程仅处理训练集（data_path 即 train_raw），
+        # valid/test 应在模型训练/评估阶段复用同样的变换逻辑处理。
         in_path = context.get("data_path") or self.data_path
         if in_path:
             try:
-                import os
-                in_dir = os.path.dirname(in_path)
-                total_rows = 0
-                split_files_found = False
-                for split_name in ("train_raw.csv", "valid_raw.csv", "test_raw.csv"):
-                    split_path = os.path.join(in_dir, split_name)
-                    if os.path.exists(split_path):
-                        split_files_found = True
-                        total_rows += len(pd.read_csv(split_path))
-                if split_files_found:
-                    if df_out.shape[0] != total_rows:
-                        return False, f"特征工程输出行数({df_out.shape[0]})与输入总行数({total_rows})不一致"
-                else:
-                    # 没有拆分文件时，回退到 data_path 对比
-                    df_in = pd.read_csv(in_path)
-                    if df_out.shape[0] != df_in.shape[0]:
-                        return False, "特征工程输出行数与输入不一致"
+                df_in = pd.read_csv(in_path)
+                if df_out.shape[0] != df_in.shape[0]:
+                    return False, f"特征工程输出行数({df_out.shape[0]})与输入行数({df_in.shape[0]})不一致"
             except Exception:
                 pass
 

@@ -171,6 +171,13 @@ try:
     with open({ctx_path!r}, "rb") as _ctx_f:
         _ctx = pickle.load(_ctx_f)
     globals().update(_ctx)
+    # 注入 sys.argv 以支持参数化脚本
+    if 'input_data_path' in _ctx or 'output_data_path' in _ctx:
+        sys.argv = [sys.argv[0] if sys.argv else 'script.py']
+        if 'input_data_path' in _ctx:
+            sys.argv.append(_ctx['input_data_path'])
+        if 'output_data_path' in _ctx:
+            sys.argv.append(_ctx['output_data_path'])
 except Exception as _e:
     print(f"警告: 加载上下文失败: {{_e}}", file=sys.stderr)
     _ctx = {{}}

@@ -22,7 +22,7 @@ SESSION_ID = f"focus_test_{int(time.time())}"
 DATA_PATH = os.path.abspath("train.csv")
 TARGET = "SalePrice"
 TASK_TYPE = "regression"
-TIMEOUT = 1800  # 每个 API 调用最多 30 分钟
+TIMEOUT = 3600  # 每个 API 调用最多 60 分钟（LLM 延迟可能很高）
 
 # 自动启动后端
 AUTO_START_BACKEND = True
@@ -167,7 +167,7 @@ def run_prerequisite_stages():
         "target_column": TARGET,
         "task_type": TASK_TYPE,
         "task_description": "房价预测回归任务。重点关注房屋面积、年份等关键特征。",
-        "model": "kimi-k2.5",
+        "model": "qwen3.6-plus",
     }, "启动工作流")
     if not result or not result.get("success"):
         print(f"  FATAL: 工作流启动失败 → {result}")
@@ -186,7 +186,7 @@ def run_prerequisite_stages():
     # 数据契约检查
     result = api("POST", f"/workflow/{SESSION_ID}/stage/data_contract_check/run", label="数据契约检查")
     if not result or not result.get("success"):
-        print(f"  FATAL: 契约检查失败")
+        print(f"  FATAL: 契约检查失败 → {result}")
         return False
     conf_id = result.get("confirmation_id", "")
     if conf_id:
@@ -270,7 +270,7 @@ def test_data_cleaning_with_revision():
         "提到删除高缺失列": any(kw in revised_proposal for kw in ["删除", "丢弃", "drop", "移除"]),
         "提到50%阈值": any(kw in revised_proposal for kw in ["50%", "50％", "0.5", "一半"]),
         "提到中位数填充": any(kw in revised_proposal for kw in ["中位数", "median"]),
-        "未使用均值": "均值" not in revised_proposal or "不使用均值" in revised_proposal or "非均值" in revised_proposal,
+        "未使用均值": "均值" not in revised_proposal or any(kw in revised_proposal for kw in ["不使用均值", "非均值", "禁用均值", "不用均值", "禁止均值", "不要均值", "严禁均值", "不采用均值"]),
     }
 
     all_met = all(user_req_checks.values())
@@ -350,18 +350,35 @@ def test_feature_engineering_skills():
     record("feature_execution", execution.get("success", False),
            f"features_data_path={execution.get('features_data_path', 'N/A')}")
 
-    # 处理 feature_evaluation 子确认
+    # 处理 feature_evaluation 子确认 — 执行评估并验证产物
     next_conf = exec_result.get("next_confirmation")
     if next_conf and next_conf.get("stage") == "feature_evaluation":
-        eval_result = confirm(next_conf["confirmation_id"])
+        eval_result = confirm(next_conf["confirmation_id"], status="confirmed")
         if eval_result:
-            record("feature_evaluation", eval_result.get("execution", {}).get("success", False),
-                   "特征评估已执行")
+            eval_exec = eval_result.get("execution", {})
+            eval_success = eval_exec.get("success", False)
+            metrics_path = eval_exec.get("metrics_result_path", "")
+            report_path = eval_exec.get("metrics_report_path", "")
+            record("feature_evaluation_execution", eval_success,
+                   f"success={eval_success}, metrics={os.path.basename(metrics_path or '')}, "
+                   f"report={os.path.basename(report_path or '')}")
+
+            # 验证评估产物文件
+            metrics_exists = bool(metrics_path) and os.path.exists(metrics_path)
+            report_exists = bool(report_path) and os.path.exists(report_path)
+            record("feature_evaluation_artifacts",
+                   metrics_exists and report_exists,
+                   f"metrics_json={metrics_exists}, report_md={report_exists}")
+
+            # 验证评估代码保存
+            eval_code_path = os.path.join(session_dir(), "code", "feature_metrics.py")
+            record("feature_evaluation_code_saved", os.path.exists(eval_code_path),
+                   f"feature_metrics.py 存在={os.path.exists(eval_code_path)}")
         else:
-            record("feature_evaluation", False, "特征评估执行失败")
+            record("feature_evaluation_execution", False, "确认执行失败")
     else:
-        # 尝试跳过
-        print("  ⚠️ 未返回 feature_evaluation 确认点，跳过")
+        print("  ⚠️ 未返回 feature_evaluation 确认点")
+        record("feature_evaluation_execution", False, "未返回确认点")
 
     return True
 
@@ -566,9 +583,11 @@ def test_model_evaluation():
 
     evaluation = exec_result.get("execution", {})
     metrics = evaluation.get("metrics", {})
+    eval_error = evaluation.get("error", "")
     record("evaluation_execution",
            evaluation.get("success", False) and bool(metrics),
-           f"metrics={list(metrics.keys()) if metrics else 'none'}")
+           f"metrics={list(metrics.keys()) if metrics else 'none'}"
+           + (f", error={eval_error}" if eval_error else ""))
 
     return True
 
@@ -591,10 +610,15 @@ def verify_all_assets():
         "cleaning/cleaning_plan.md": "清洗方案",
         "cleaning/cleaning_result.json": "清洗结果",
         "features/feature_engineering_plan.md": "特征方案",
+        "features/feature_metrics.json": "特征评估指标",
+        "features/feature_metrics_report.md": "特征评估报告",
+        "features/feature_evaluation_result.json": "特征评估结果",
         "models/model_training_plan.md": "建模方案",
         "models/trained_model.pkl": "训练模型",
         "models/training_summary.json": "训练摘要",
         "code/model_training.py": "训练代码",
+        "code/feature_metrics.py": "特征评估代码",
+        "code/pipeline.py": "全流程脚本",
         "state/workflow_state.json": "工作流状态",
     }
 
@@ -611,11 +635,26 @@ def verify_all_assets():
     # 检查清洗和特征代码也保存了
     cleaning_code = os.path.join(sd, "code", "cleaning.py")
     feature_code = os.path.join(sd, "code", "feature_engineering.py")
+    pipeline_code = os.path.join(sd, "code", "pipeline.py")
     record("all_code_files_saved",
            os.path.exists(cleaning_code) and os.path.exists(model_code_path := os.path.join(sd, "code", "model_training.py")),
            f"cleaning.py={os.path.exists(cleaning_code)}, "
            f"feature_engineering.py={os.path.exists(feature_code)}, "
            f"model_training.py={os.path.exists(model_code_path)}")
+
+    # 检查 pipeline.py 是否包含 train 和 predict 模式
+    if os.path.exists(pipeline_code):
+        with open(pipeline_code, "r") as f:
+            pipeline_content = f.read()
+        has_train = "run_training" in pipeline_content
+        has_predict = "run_predict" in pipeline_content
+        has_argparse = "--mode" in pipeline_content
+        record("pipeline_script_complete",
+               has_train and has_predict and has_argparse,
+               f"train={has_train}, predict={has_predict}, argparse={has_argparse}, "
+               f"长度={len(pipeline_content)} chars")
+    else:
+        record("pipeline_script_complete", False, "pipeline.py 不存在")
 
 
 # ─────────────────────────────────────────────
@@ -633,6 +672,7 @@ def verify_skill_tool_calls_in_logs():
         return
 
     skill_calls_found = False
+    skill_content_found = False
     skill_call_details = []
 
     for filename in os.listdir(log_dir):
@@ -654,10 +694,23 @@ def verify_skill_tool_calls_in_logs():
                     skill_calls_found = True
                     stage = entry.get("stage", "unknown")
                     skill_call_details.append(stage)
+                # 检查是否实际返回了 skill 内容（而非仅返回定义/摘要）
+                if any(kw in content for kw in [
+                    "以下内容为技术参考",  # read_skill 返回的 header
+                    "Hypothesis Testing",  # data-analysis techniques
+                    "Data Quality Assessment",  # ml-engineering phase2
+                    "Experiment Tracking",  # ml-engineering phase3
+                    "Feature Engineering Patterns",  # ml-engineering phase2
+                ]):
+                    skill_content_found = True
 
     record("skill_tool_in_logs", skill_calls_found,
            f"发现 skill 工具调用的阶段: {list(set(skill_call_details))}" if skill_calls_found
-           else "未在日志中发现 skill 工具调用（可能 skill 内容通过 prompt 注入）")
+           else "未在日志中发现 skill 工具调用")
+
+    record("skill_content_actually_read", skill_content_found,
+           "日志中包含 skill 实际内容（非仅定义/摘要）" if skill_content_found
+           else "日志中仅包含 skill 定义/摘要，未读取到实际内容")
 
 
 # ─────────────────────────────────────────────
@@ -729,6 +782,7 @@ def main():
                 "feature_skill_referenced",
                 "model_skill_referenced",
                 "skill_tool_in_logs",
+                "skill_content_actually_read",
             ],
             "关注点3: 代码正确保存": [
                 "model_code_saved", "model_code_nonempty",
@@ -736,6 +790,10 @@ def main():
                 "training_summary_content", "model_plan_md_saved",
                 "model_artifact_structure",
                 "all_code_files_saved", "asset_completeness",
+                "pipeline_script_complete",
+                "feature_evaluation_execution",
+                "feature_evaluation_artifacts",
+                "feature_evaluation_code_saved",
             ],
             "关注点4: 按方案生成代码": [
                 "model_code_matches_plan",

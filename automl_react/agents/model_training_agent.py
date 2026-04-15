@@ -61,9 +61,9 @@ class ModelTrainingAgent(ReActAgent):
         session_dir = self.asset_manager.session_dir
         return {
             "model_path": str(session_dir / "models" / "trained_model.pkl"),
-            "train_split_path": str(session_dir / "data" / "train_raw.csv"),
-            "valid_split_path": str(session_dir / "data" / "valid_raw.csv"),
-            "test_split_path": str(session_dir / "data" / "test_raw.csv"),
+            "train_split_path": str(session_dir / "data" / "features_train.csv"),
+            "valid_split_path": str(session_dir / "data" / "features_valid.csv"),
+            "test_split_path": str(session_dir / "data" / "features_test.csv"),
             "training_summary_path": str(session_dir / "models" / "training_summary.json")
         }
 
@@ -82,11 +82,17 @@ class ModelTrainingAgent(ReActAgent):
     @staticmethod
     def _normalize_target_transform(raw_transform: Any) -> Optional[str]:
         """规范化目标变换字段。"""
-        if not raw_transform or not isinstance(raw_transform, str):
+        if not raw_transform:
             return None
-
-        lowered = raw_transform.lower()
-        if "log1p" in lowered:
+        # 兼容 dict 格式: {"train": "log1p", "inference": "expm1"}
+        if isinstance(raw_transform, dict):
+            for val in raw_transform.values():
+                if isinstance(val, str) and "log1p" in val.lower():
+                    return "log1p"
+            return None
+        if not isinstance(raw_transform, str):
+            return None
+        if "log1p" in raw_transform.lower():
             return "log1p"
         return None
 
@@ -243,6 +249,35 @@ class ModelTrainingAgent(ReActAgent):
         valid_shape = valid_df.shape if valid_df is not None else None
         return True, f"train={train_df.shape}, valid={valid_shape}, test={test_df.shape}, target={target_column}"
 
+    def _infer_model_from_plan(self, task_type: str):
+        """从 model_plan 中推断用户期望的模型类型及参数。"""
+        plan = getattr(self, "model_plan", None) or ""
+        plan_lower = plan.lower()
+
+        if "regression" in task_type:
+            from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+            if "gradientboosting" in plan_lower or "梯度提升" in plan_lower:
+                params = {"n_estimators": 200, "learning_rate": 0.05, "max_depth": 4, "random_state": 42}
+                # 从方案中提取参数覆盖
+                import re
+                for p in ("n_estimators", "learning_rate", "max_depth", "subsample", "min_samples_leaf"):
+                    m = re.search(rf"{p}\s*[=:]\s*([\d.]+)", plan)
+                    if m:
+                        params[p] = int(m.group(1)) if "." not in m.group(1) else float(m.group(1))
+                return GradientBoostingRegressor(**params), "GradientBoostingRegressor"
+            return RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1), "RandomForestRegressor"
+        else:
+            from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+            if "gradientboosting" in plan_lower or "梯度提升" in plan_lower:
+                params = {"n_estimators": 200, "learning_rate": 0.05, "max_depth": 4, "random_state": 42}
+                import re
+                for p in ("n_estimators", "learning_rate", "max_depth", "subsample", "min_samples_leaf"):
+                    m = re.search(rf"{p}\s*[=:]\s*([\d.]+)", plan)
+                    if m:
+                        params[p] = int(m.group(1)) if "." not in m.group(1) else float(m.group(1))
+                return GradientBoostingClassifier(**params), "GradientBoostingClassifier"
+            return RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1), "RandomForestClassifier"
+
     def _deterministic_model_training_fallback(self, context: Dict[str, Any], output_path: str) -> Tuple[bool, str]:
         """确定性兜底：使用简单 sklearn 基线模型完成训练并落盘。"""
         import pandas as pd
@@ -286,9 +321,16 @@ class ModelTrainingAgent(ReActAgent):
             return False, "缺少可用的测试集资产"
 
         x_train_raw = train_df.drop(columns=[target_column])
+        # 排除 Id/标识列，避免数据泄漏
+        id_cols = [c for c in x_train_raw.columns if c.lower() in ("id", "index", "row_id", "row_number")]
+        if id_cols:
+            x_train_raw = x_train_raw.drop(columns=id_cols)
+            print(f"[Fallback] 排除标识列: {id_cols}")
         evaluation_df = valid_df if valid_df is not None and not valid_df.empty else test_df
         evaluation_split_name = "valid" if valid_df is not None and not valid_df.empty else "test"
         x_valid_raw = evaluation_df.drop(columns=[target_column])
+        if id_cols:
+            x_valid_raw = x_valid_raw.drop(columns=[c for c in id_cols if c in x_valid_raw.columns])
         y_train = train_df[target_column]
         y_valid = evaluation_df[target_column]
 
@@ -316,10 +358,8 @@ class ModelTrainingAgent(ReActAgent):
             remainder="drop",
         )
 
-        if "regression" in task_type:
-            estimator = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
-        else:
-            estimator = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+        estimator, estimator_name = self._infer_model_from_plan(task_type)
+        print(f"[Fallback] 使用模型: {estimator_name}")
 
         model = Pipeline([
             ("preprocessor", preprocessor),

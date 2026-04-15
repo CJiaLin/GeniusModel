@@ -35,6 +35,7 @@ from automl_react.agents.data_analysis_agent import DataAnalysisAgent
 from automl_react.report import PipelineGenerator, ReportGenerator
 from automl_react.workflow import WorkflowState, WorkflowStage
 from automl_react.confirmation import ConfirmationManager, ConfirmationStatus
+from automl_react.confirmation.confirmation_point import SkillReference
 from automl_react.assets import get_asset_manager
 from automl_react.logger import get_llm_logger
 from automl_react.skills_loader import get_skill_loader
@@ -936,9 +937,17 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 print(f"[API] ========== 数据清洗阶段完成 ==========")
                 
                 # 创建确认点
+                skills_referenced = [
+                    SkillReference(
+                        skill_name="data-analysis-1.0.2",
+                        skill_path="skills/data-analysis-1.0.2",
+                        reference_file="techniques.md, pitfalls.md"
+                    )
+                ]
                 confirmation_point = confirmation_manager.add_confirmation_point(
                     stage="data_cleaning",
-                    proposal_content=result
+                    proposal_content=result,
+                    skills_referenced=skills_referenced
                 )
                 confirmation_point.modifiable_aspects = agent.get_modifiable_aspects()
 
@@ -949,6 +958,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     "requires_confirmation": True,
                     "confirmation_id": confirmation_point.id,
                     "modifiable_aspects": confirmation_point.modifiable_aspects,
+                    "skills_referenced": [{"name": s.skill_name, "files": [s.reference_file]} for s in skills_referenced],
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
@@ -1016,9 +1026,17 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 print(f"[API] ========== 特征工程阶段完成 ==========")
                 
                 # 创建确认点
+                skills_referenced = [
+                    SkillReference(
+                        skill_name="afrexai-ml-engineering-1.0.0",
+                        skill_path="skills/afrexai-ml-engineering-1.0.0",
+                        reference_file="SKILL.md (Phase 2: Data Engineering)"
+                    )
+                ]
                 confirmation_point = confirmation_manager.add_confirmation_point(
                     stage="feature_engineering",
-                    proposal_content=result
+                    proposal_content=result,
+                    skills_referenced=skills_referenced
                 )
                 confirmation_point.modifiable_aspects = agent.get_modifiable_aspects()
 
@@ -1029,6 +1047,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     "requires_confirmation": True,
                     "confirmation_id": confirmation_point.id,
                     "modifiable_aspects": confirmation_point.modifiable_aspects,
+                    "skills_referenced": [{"name": s.skill_name, "files": [s.reference_file]} for s in skills_referenced],
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
@@ -1095,9 +1114,17 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                 print(f"[API] ========== 模型训练阶段完成 ==========")
 
                 # 创建确认点
+                skills_referenced = [
+                    SkillReference(
+                        skill_name="afrexai-ml-engineering-1.0.0",
+                        skill_path="skills/afrexai-ml-engineering-1.0.0",
+                        reference_file="SKILL.md (Phase 3: Model Selection)"
+                    )
+                ]
                 confirmation_point = confirmation_manager.add_confirmation_point(
                     stage="model_training",
-                    proposal_content=result
+                    proposal_content=result,
+                    skills_referenced=skills_referenced
                 )
                 confirmation_point.modifiable_aspects = agent.get_modifiable_aspects()
 
@@ -1108,6 +1135,7 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     "requires_confirmation": True,
                     "confirmation_id": confirmation_point.id,
                     "modifiable_aspects": confirmation_point.modifiable_aspects,
+                    "skills_referenced": [{"name": s.skill_name, "files": [s.reference_file]} for s in skills_referenced],
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
@@ -1170,7 +1198,8 @@ async def submit_confirmation(request: UserConfirmationRequest):
     """
     from automl_react.utils import execute_code_safely
     
-    session = get_session(request.session_id)
+    session_id = request.session_id
+    session = get_session(session_id)
     confirmation_manager = session.get("confirmation_manager")
     workflow_state = session.get("workflow_state")
     
@@ -1189,15 +1218,17 @@ async def submit_confirmation(request: UserConfirmationRequest):
     if not status:
         raise HTTPException(status_code=400, detail="无效的确认状态")
     
-    # 获取确认点信息
-    current_confirmation = confirmation_manager.current
+    # 获取确认点信息 — 必须使用 request.confirmation_id 定位正确的确认点
+    current_confirmation = confirmation_manager._find_point_by_id(request.confirmation_id)
     if not current_confirmation:
-        # 如果没有当前确认点，尝试从队列中获取第一个
-        pending_points = confirmation_manager.get_pending_points()
-        if pending_points:
-            current_confirmation = pending_points[0]
-        else:
-            raise HTTPException(status_code=404, detail="没有待处理的确认")
+        # 降级：尝试 current 或 pending
+        current_confirmation = confirmation_manager.current
+        if not current_confirmation:
+            pending_points = confirmation_manager.get_pending_points()
+            if pending_points:
+                current_confirmation = pending_points[0]
+            else:
+                raise HTTPException(status_code=404, detail="没有待处理的确认")
     
     stage = current_confirmation.stage
     data_path = workflow_state.get_context("data_path")
@@ -1282,7 +1313,23 @@ async def submit_confirmation(request: UserConfirmationRequest):
                         report_gen.generate_summary_json(data_path, target_column, task_type)
                         print(f"[API] 自动生成报告完成")
                     except Exception as report_err:
+                        import traceback as _tb
                         print(f"[API] 自动报告生成失败（不影响主流程）: {report_err}")
+                        _tb.print_exc()
+                    # 自动生成全流程 pipeline 脚本
+                    try:
+                        pipeline_gen = PipelineGenerator(session_id=session_id)
+                        data_path = workflow_state.get_context("data_path", "")
+                        pipeline_gen.generate_pipeline_script(
+                            data_path=data_path,
+                            target_column=target_column,
+                            task_type=task_type,
+                        )
+                        print(f"[API] 自动生成 pipeline 脚本完成")
+                    except Exception as pipeline_err:
+                        import traceback as _tb
+                        print(f"[API] 自动 pipeline 脚本生成失败（不影响主流程）: {pipeline_err}")
+                        _tb.print_exc()
         except Exception as e:
             return JSONResponse(
                 status_code=500,
@@ -1443,6 +1490,41 @@ async def revise_plan(request: PlanRevisionRequest):
     }
 
 
+def _rerun_script_on_split(
+    script_path: str,
+    input_path: str,
+    output_path: str,
+    timeout: int = 300,
+) -> Dict:
+    """直接 subprocess 执行已保存的 .py 脚本（不走 LLM），用于在 valid/test 上重跑清洗/特征工程代码。"""
+    import subprocess as sp
+
+    if not os.path.exists(script_path):
+        return {"success": False, "error": f"脚本不存在: {script_path}"}
+    if not os.path.exists(input_path):
+        return {"success": False, "error": f"输入文件不存在: {input_path}"}
+
+    try:
+        result = sp.run(
+            [sys.executable, script_path, input_path, output_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=os.path.dirname(script_path),
+        )
+        success = result.returncode == 0 and os.path.exists(output_path)
+        return {
+            "success": success,
+            "output": result.stdout,
+            "error": result.stderr.strip() if result.stderr and result.stderr.strip() else None,
+            "return_code": result.returncode,
+        }
+    except sp.TimeoutExpired:
+        return {"success": False, "error": f"执行超时: 超过 {timeout} 秒"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 async def execute_data_cleaning(session: Dict, data_path: str, modifications: Optional[str] = None) -> Dict:
     """执行数据清洗（CodeAct 模式）"""
     import shutil
@@ -1480,14 +1562,50 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
     final_cleaned_path = agent.cleaned_data_path
     import os
     file_exists = os.path.exists(final_cleaned_path)
-    
+
     if not file_exists:
         print(f"[API] 警告: 清洗后的数据文件不存在: {final_cleaned_path}")
-    
+
+    # ====== 在 valid/test 上重跑同一清洗脚本 ======
+    workflow_state = session.get("workflow_state")
+    cleaned_valid_path = None
+    cleaned_test_path = None
+
+    if file_exists and workflow_state:
+        script_path = str(asset_manager.session_dir / "code" / "cleaning.py")
+        valid_raw = workflow_state.get_context("valid_raw_path")
+        test_raw = workflow_state.get_context("test_raw_path")
+        data_dir = str(asset_manager.session_dir / "data")
+
+        if valid_raw and os.path.exists(valid_raw):
+            cleaned_valid_path = os.path.join(data_dir, "cleaned_valid.csv")
+            r = _rerun_script_on_split(script_path, valid_raw, cleaned_valid_path)
+            if r["success"]:
+                print(f"[API] valid 清洗完成: {cleaned_valid_path}")
+                workflow_state.set_context("cleaned_valid_path", cleaned_valid_path)
+            else:
+                print(f"[API] valid 清洗失败: {r.get('error')}")
+                cleaned_valid_path = None
+
+        if test_raw and os.path.exists(test_raw):
+            cleaned_test_path = os.path.join(data_dir, "cleaned_test.csv")
+            r = _rerun_script_on_split(script_path, test_raw, cleaned_test_path)
+            if r["success"]:
+                print(f"[API] test 清洗完成: {cleaned_test_path}")
+                workflow_state.set_context("cleaned_test_path", cleaned_test_path)
+            else:
+                print(f"[API] test 清洗失败: {r.get('error')}")
+                cleaned_test_path = None
+
+        # 训练集清洗路径也存入 workflow_state
+        workflow_state.set_context("cleaned_train_path", final_cleaned_path)
+
     # 构建执行结果
     execution_result = {
         "success": file_exists,
         "cleaned_data_path": final_cleaned_path,
+        "cleaned_valid_path": cleaned_valid_path,
+        "cleaned_test_path": cleaned_test_path,
         "original_path": data_path,
         "timestamp": datetime.now().isoformat(),
         "stage": "data_cleaning"
@@ -1754,10 +1872,46 @@ async def execute_feature_engineering(
     if not file_exists:
         print(f"[API] 警告: 特征工程后的数据文件不存在: {features_data_path}")
 
+    # ====== 在 valid/test 上重跑同一特征工程脚本 ======
+    workflow_state = session.get("workflow_state")
+    features_valid_path = None
+    features_test_path = None
+
+    if file_exists and workflow_state:
+        script_path = str(asset_manager.session_dir / "code" / "feature_engineering.py")
+        cleaned_valid = workflow_state.get_context("cleaned_valid_path")
+        cleaned_test = workflow_state.get_context("cleaned_test_path")
+        data_dir = str(asset_manager.session_dir / "data")
+
+        if cleaned_valid and os.path.exists(cleaned_valid):
+            features_valid_path = os.path.join(data_dir, "features_valid.csv")
+            r = _rerun_script_on_split(script_path, cleaned_valid, features_valid_path)
+            if r["success"]:
+                print(f"[API] valid 特征工程完成: {features_valid_path}")
+                workflow_state.set_context("features_valid_path", features_valid_path)
+            else:
+                print(f"[API] valid 特征工程失败: {r.get('error')}")
+                features_valid_path = None
+
+        if cleaned_test and os.path.exists(cleaned_test):
+            features_test_path = os.path.join(data_dir, "features_test.csv")
+            r = _rerun_script_on_split(script_path, cleaned_test, features_test_path)
+            if r["success"]:
+                print(f"[API] test 特征工程完成: {features_test_path}")
+                workflow_state.set_context("features_test_path", features_test_path)
+            else:
+                print(f"[API] test 特征工程失败: {r.get('error')}")
+                features_test_path = None
+
+        # 训练集特征路径也存入 workflow_state
+        workflow_state.set_context("features_train_path", features_data_path)
+
     # 构建执行结果
     execution_result = {
         "success": file_exists,
         "features_data_path": features_data_path if file_exists else None,
+        "features_valid_path": features_valid_path,
+        "features_test_path": features_test_path,
         "original_path": data_path,
         "timestamp": datetime.now().isoformat(),
         "stage": "feature_engineering",
@@ -1849,14 +2003,14 @@ async def execute_model_training(
             exploration_report=exploration_report,
             feature_metrics_report=feature_metrics_report,
             features_data_path=features_data_path,
-            train_split_path=workflow_state.get_context("train_raw_path") if workflow_state else None,
-            valid_split_path=workflow_state.get_context("valid_raw_path") if workflow_state else None,
-            test_split_path=workflow_state.get_context("test_raw_path") if workflow_state else None,
+            train_split_path=(workflow_state.get_context("features_train_path") or workflow_state.get_context("train_raw_path")) if workflow_state else None,
+            valid_split_path=(workflow_state.get_context("features_valid_path") or workflow_state.get_context("valid_raw_path")) if workflow_state else None,
+            test_split_path=(workflow_state.get_context("features_test_path") or workflow_state.get_context("test_raw_path")) if workflow_state else None,
         )
     elif workflow_state:
-        agent.train_split_path = workflow_state.get_context("train_raw_path")
-        agent.valid_split_path = workflow_state.get_context("valid_raw_path")
-        agent.test_split_path = workflow_state.get_context("test_raw_path")
+        agent.train_split_path = workflow_state.get_context("features_train_path") or workflow_state.get_context("train_raw_path")
+        agent.valid_split_path = workflow_state.get_context("features_valid_path") or workflow_state.get_context("valid_raw_path")
+        agent.test_split_path = workflow_state.get_context("features_test_path") or workflow_state.get_context("test_raw_path")
 
     # 生成训练代码并执行
     code = agent.generate_model_code(modifications)

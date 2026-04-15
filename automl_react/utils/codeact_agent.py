@@ -110,14 +110,14 @@ class CodeActAgent:
 
             # L1: 代码完整性校验（语法/结构）
             if syntax_check:
-                syntax_ok, syntax_msg = self._validate_code_syntax(current_code)
+                syntax_ok, syntax_msg = self._validate_code_syntax(current_code, stage=stage)
                 if not syntax_ok:
                     last_error = syntax_msg
                     continue
             
             # 执行代码
             print(f"[CodeAct] 执行代码...")
-            exec_result = self._execute_code(current_code, context)
+            exec_result = self._execute_code(current_code, context, required_outputs)
             
             if exec_result["success"]:
                 # 检查必需的输出变量
@@ -182,16 +182,54 @@ class CodeActAgent:
             execution_error=last_error
         )
 
-    def _validate_code_syntax(self, code: str) -> Tuple[bool, str]:
-        """校验代码是否可解析，避免明显不完整代码进入执行阶段。"""
+    def _validate_code_syntax(self, code: str, stage: str = "") -> Tuple[bool, str]:
+        """校验代码是否可解析，并检查禁止的代码格式模式。"""
         if not code or not code.strip():
             return False, "代码为空"
 
         try:
-            ast.parse(code)
-            return True, "ok"
+            tree = ast.parse(code)
         except SyntaxError as e:
             return False, f"代码语法不完整: {e}"
+
+        # 格式约束检查
+        for node in ast.walk(tree):
+            # R1: 禁止 globals().update()
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == 'update'
+                    and isinstance(node.func.value, ast.Call)
+                    and isinstance(node.func.value.func, ast.Name)
+                    and node.func.value.func.id == 'globals'):
+                return False, "代码格式违规: 不要使用 globals().update()，直接赋值变量即可"
+
+        for node in tree.body:
+            # R2: 禁止 def main()
+            if (isinstance(node, ast.FunctionDef)
+                    and node.name == 'main'
+                    and len(node.args.args) == 0):
+                return False, "代码格式违规: 不要用 def main() 包装代码，请将代码直接写为顶层可执行语句"
+
+            # R3: 禁止 if __name__ == "__main__"
+            if isinstance(node, ast.If):
+                test = node.test
+                if (isinstance(test, ast.Compare)
+                        and isinstance(test.left, ast.Name) and test.left.id == '__name__'
+                        and any(isinstance(c, ast.Constant) and c.value == '__main__' for c in test.comparators)):
+                    return False, "代码格式违规: 不要写 if __name__ == '__main__' 块"
+
+            # R5: stage-specific 保留名检查
+            if isinstance(node, ast.FunctionDef):
+                if "cleaning" in stage and node.name == "clean_data":
+                    return False, "代码格式违规: 不要定义名为 clean_data 的函数（此名称由流水线框架保留）"
+                if "feature" in stage and node.name == "engineer_features":
+                    return False, "代码格式违规: 不要定义名为 engineer_features 的函数（此名称由流水线框架保留）"
+
+        # R4: 禁止多行 import（括号换行）
+        if re.search(r'from\s+\S+\s+import\s*\(', code):
+            return False, "代码格式违规: import 语句必须写在单行，不要用括号换行（from X import a, b, c）"
+
+        return True, "ok"
 
     def _validate_required_file(
         self,
@@ -243,7 +281,15 @@ class CodeActAgent:
 常见错误预防：
 - 将 numpy 类型转为 Python 原生类型后再做 JSON 序列化
 - 使用 .copy() 避免 SettingWithCopyWarning
-- 处理可能的空 DataFrame 或缺失列情况"""
+- 处理可能的空 DataFrame 或缺失列情况
+
+代码格式约束（必须严格遵守）：
+- 不要使用 globals().update()
+- 不要用 def main(): 包装代码，直接写顶层可执行代码
+- 不要写 if __name__ == "__main__": 块
+- 所有 import 语句必须写在单行，不要用括号换行
+  （正确: from sklearn.metrics import accuracy_score, f1_score, r2_score）
+  （错误: from sklearn.metrics import (\\n    accuracy_score,\\n    f1_score\\n)）"""
 
         human_content = f"""## 当前任务
 
@@ -272,7 +318,13 @@ class CodeActAgent:
 
 输出要求：
 1. 只输出 Python 代码块，用 ```python 和 ``` 包围
-2. 输出完整修复后代码，不是补丁片段"""
+2. 输出完整修复后代码，不是补丁片段
+
+代码格式约束（必须严格遵守）：
+- 不要使用 globals().update()
+- 不要用 def main(): 包装代码，直接写顶层可执行代码
+- 不要写 if __name__ == "__main__": 块
+- 所有 import 语句必须写在单行，不要用括号换行"""
 
         human_content = f"""## 原始任务
 
@@ -370,17 +422,18 @@ class CodeActAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
-    def _execute_code(self, code: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _execute_code(self, code: str, context: Dict[str, Any] = None, required_output_names: List[str] = None) -> Dict[str, Any]:
         """执行代码（根据配置选择子进程或内联模式）"""
         if self.use_subprocess:
-            return self._execute_code_subprocess(code, context)
+            return self._execute_code_subprocess(code, context, required_output_names)
         return self._execute_code_inline(code, context)
 
-    def _execute_code_subprocess(self, code: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _execute_code_subprocess(self, code: str, context: Dict[str, Any] = None, required_output_names: List[str] = None) -> Dict[str, Any]:
         """在子进程中执行代码"""
         result = self.subprocess_executor.execute(
             code=code,
             context=context or {},
+            required_output_names=required_output_names or [],
         )
 
         if result.success:

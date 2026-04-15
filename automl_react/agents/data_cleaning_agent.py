@@ -400,7 +400,7 @@ class DataCleaningAgent(ReActAgent):
 重要：请基于上述实际数据列名生成代码，不要使用示例数据中的列名。
 """
 
-        self.cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_data.csv")
+        self.cleaned_data_path = str(self.asset_manager.session_dir / "data" / "cleaned_train.csv")
 
         prompt_template = self.config_loader.get_prompt("data_cleaning", "code_generation_full")
         task_prompt = prompt_template.format(
@@ -418,7 +418,9 @@ class DataCleaningAgent(ReActAgent):
         # 准备执行上下文
         context = {
             "data_path": self.data_path,
-            "cleaned_data_path": self.cleaned_data_path
+            "cleaned_data_path": self.cleaned_data_path,
+            "input_data_path": self.data_path,
+            "output_data_path": self.cleaned_data_path,
         }
 
         # 生成代码并执行验证

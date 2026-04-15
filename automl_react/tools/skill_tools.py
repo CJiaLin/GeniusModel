@@ -66,7 +66,12 @@ class SkillSearchTool(BaseTool):
             if not results:
                 return ToolResult.success(data="未找到匹配的技能包。请尝试其他关键词。")
 
-            return ToolResult.success(data=results)
+            return ToolResult.success(
+                data={
+                    "note": "以上仅为技能包索引摘要，不包含实际内容。必须使用 read_skill 工具并指定 section 参数来读取具体章节内容。",
+                    "skills": results,
+                }
+            )
 
         except Exception as e:
             return ToolResult.error(f"技能搜索失败: {e}")

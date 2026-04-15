@@ -168,8 +168,8 @@ class ReActAgent(ABC):
 ## 效率要求
 
 - 每次"思考"应明确你已知什么、还需要什么、为什么选择这个行动
-- 尽量在最少的迭代次数内完成任务
-- 如果一个工具调用能获取多个信息，优先使用它而非多次调用
+- 可以进行多次工具调用来收集充分信息，特别是 read_skill 需要分别读取不同章节时
+- 在信息充分后尽快输出最终答案
 """
 
         memory_context = self.memory.get_short_term_context(
@@ -193,13 +193,9 @@ class ReActAgent(ABC):
                 "观察结果:",
                 observation,
                 "",
-                "基于以上观察结果，请直接输出最终答案。",
-                "你必须使用以下格式：",
+                "基于以上观察结果继续推理。如果还需要更多信息，可以继续使用工具；如果信息已充分，请输出最终答案。",
                 "",
-                "思考: 基于观察结果进行总结",
-                "最终答案: 你的完整回答",
-                "",
-                "请输出最终答案：",
+                "请按照 ReAct 格式继续：",
             ])
         else:
             user_sections.append("请按照 ReAct 格式进行思考和行动：")
@@ -572,8 +568,7 @@ class ReActAgent(ABC):
     
     def _register_default_tools(self):
         """注册默认工具（子类应调用 super()._register_default_tools()）"""
-        from ..tools.skill_tools import SkillSearchTool, SkillReadTool
-        self.register_tool("search_skills", SkillSearchTool())
+        from ..tools.skill_tools import SkillReadTool
         self.register_tool("read_skill", SkillReadTool())
     
     def reset(self):

@@ -98,6 +98,13 @@ class ModelEvaluator:
             target_transform=target_transform,
         )
 
+        # 保存评估代码
+        self.asset_manager.save_code(
+            code=eval_code,
+            filename="model_evaluation.py",
+            metadata={"stage": "model_evaluation", "task_type": task_type}
+        )
+
         # 执行评估
         try:
             local_vars = {}
@@ -108,7 +115,7 @@ class ModelEvaluator:
 
             # 添加元数据
             result = {
-                "success": True,
+                "success": bool(evaluation_results),
                 "model_path": model_path,
                 "data_path": data_path,
                 "target_column": target_column,
@@ -129,9 +136,11 @@ class ModelEvaluator:
             return result
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return {
                 "success": False,
-                "error": str(e),
+                "error": f"评估代码执行失败: {str(e)}",
                 "timestamp": datetime.now().isoformat()
             }
 
@@ -186,11 +195,17 @@ class ModelEvaluator:
     @staticmethod
     def _normalize_target_transform(raw_transform: Any) -> Optional[str]:
         """规范化目标变换标记。"""
-        if not raw_transform or not isinstance(raw_transform, str):
+        if not raw_transform:
             return None
-
-        lowered = raw_transform.lower()
-        if "log1p" in lowered:
+        # 兼容 dict 格式: {"train": "log1p", "inference": "expm1"}
+        if isinstance(raw_transform, dict):
+            for val in raw_transform.values():
+                if isinstance(val, str) and "log1p" in val.lower():
+                    return "log1p"
+            return None
+        if not isinstance(raw_transform, str):
+            return None
+        if "log1p" in raw_transform.lower():
             return "log1p"
         return None
 
@@ -219,7 +234,8 @@ class ModelEvaluator:
         """
         metrics_code = ", ".join([f"'{m}'" for m in metrics])
         expected_feature_names_json = json.dumps(expected_feature_names, ensure_ascii=False)
-        target_transform_json = json.dumps(target_transform, ensure_ascii=False)
+        # json.dumps(None) 输出 "null"，在 Python 中无效，需转为 "None"
+        target_transform_repr = repr(target_transform)
 
         code = f'''
 import pandas as pd
@@ -233,7 +249,7 @@ import numpy as np
 
 
 EXPECTED_FEATURE_NAMES = {expected_feature_names_json}
-INFERRED_TARGET_TRANSFORM = {target_transform_json}
+INFERRED_TARGET_TRANSFORM = {target_transform_repr}
 
 
 def load_model_artifact(path):
@@ -282,7 +298,7 @@ def align_features(features, expected_feature_names, model, artifact=None):
 def resolve_target_transform(artifact, inferred_target_transform):
     if isinstance(artifact, dict):
         raw_transform = artifact.get("target_transform")
-        if isinstance(raw_transform, str) and raw_transform.lower() == "log1p":
+        if isinstance(raw_transform, str) and "log1p" in raw_transform.lower():
             return "log1p", "artifact_package"
 
     if inferred_target_transform:
@@ -347,8 +363,12 @@ def rmsle_score(y_true, y_pred):
 
 # 加载数据
 df = pd.read_csv("{data_path}")
-X = df.drop(columns=["{target_column}"])
-y = df["{target_column}"]
+if "{target_column}" in df.columns:
+    X = df.drop(columns=["{target_column}"])
+    y = df["{target_column}"]
+else:
+    X = df
+    y = None
 
 # 加载模型
 model_artifact = load_model_artifact("{model_path}")
@@ -364,7 +384,9 @@ y_pred, evaluation_diagnostics = predict_from_artifact(
 # 计算评估指标
 evaluation_results = {{}}
 
-if "{task_type}" == "classification":
+if y is None:
+    evaluation_results["warning"] = "测试集不包含目标列，无法计算评估指标"
+elif "{task_type}" == "classification":
     if "accuracy" in [{metrics_code}]:
         evaluation_results["accuracy"] = float(accuracy_score(y, y_pred))
     if "precision" in [{metrics_code}]:
