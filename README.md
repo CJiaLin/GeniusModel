@@ -40,7 +40,9 @@
 | **ReActAgent** | `core/react_agent.py` | ReAct 循环引擎，工具管理，LLM 消息构建与交互 |
 | **Memory** | `core/memory.py` | 对话历史、思考过程、动作和观察的记忆管理 |
 | **Observation** | `core/observation.py` | 工具执行结果的统一表示（数据、错误、状态） |
-| **ConfigLoader** | `config/config_loader.py` | 从 YAML 加载 Prompt、LLM 配置、工作流配置 |
+| **Middleware** | `core/middleware.py` | 中间件基类，定义迭代上下文和中间件链 |
+| **ConfigLoader** | `config/config_loader.py` | 从 YAML 加载 Prompt、LLM 配置、工作流配置（支持 `${ENV_VAR}` 环境变量引用） |
+| **LLMProviderFactory** | `llm/provider_factory.py` | LLM 提供者工厂，统一管理多种模型提供者 |
 | **AssetManager** | `assets/asset_manager.py` | 会话资产管理（数据、代码、模型、报告）按目录组织 |
 | **WorkflowState** | `workflow/workflow_state.py` | 工作流阶段跟踪、状态转移验证、持久化 |
 | **LLMLogger** | `logger/llm_logger.py` | 记录 LLM 调用（输入/输出/Token/延迟）为 JSONL |
@@ -48,6 +50,29 @@
 | **SubprocessExecutor** | `utils/subprocess_executor.py` | 隔离子进程执行 LLM 生成的代码，超时控制与崩溃隔离 |
 | **CodeActAgent** | `utils/codeact_agent.py` | CodeAct 模式：迭代式代码生成与执行 |
 | **CodeGenerator** | `utils/code_generator.py` | 代码生成与执行验证 |
+| **Sandbox** | `utils/sandbox.py` | 沙箱执行环境封装 |
+
+### 中间件系统
+
+系统采用中间件链模式，在 ReAct 迭代过程中插入横切关注点：
+
+| 中间件 | 位置 | 职责 |
+|--------|------|------|
+| **SummarizationMiddleware** | `core/middlewares/summarization_middleware.py` | 记忆上下文优化，压缩历史信息 |
+| **LoggingMiddleware** | `core/middlewares/logging_middleware.py` | LLM 调用日志记录 |
+| **ErrorHandlingMiddleware** | `core/middlewares/error_handling_middleware.py` | 错误捕获与恢复策略 |
+| **TokenMonitorMiddleware** | `core/middlewares/token_monitor_middleware.py` | Token 用量跟踪与监控 |
+| **TimeoutMiddleware** | `core/middlewares/timeout_middleware.py` | 执行超时管理 |
+
+### LLM 提供者系统
+
+通过工厂模式支持多种 LLM 提供者，统一接口调用：
+
+| 提供者 | 位置 | 说明 |
+|--------|------|------|
+| **OpenAIProvider** | `llm/providers/openai_provider.py` | OpenAI 原生 API |
+| **OpenAICompatibleProvider** | `llm/providers/openai_compatible_provider.py` | OpenAI 兼容 API（Kimi、DeepSeek、通义千问等） |
+| **AnthropicProvider** | `llm/providers/anthropic_provider.py` | Anthropic Claude API |
 
 ## 完整建模工作流
 
@@ -101,6 +126,8 @@ Agent 在需要时自动调用 `skills/` 目录下的专业知识包，Markdown 
 | Skill | 版本 | 用途 | 关联阶段 |
 |-------|------|------|----------|
 | **data-analysis** | 1.0.2 | 数据分析方法论、图表选择、指标契约、陷阱识别 | 数据清洗、数据探索 |
+| **feature-engineering-patterns** | 1.0.0 | 特征工程模式与最佳实践 | 特征工程 |
+| **model-selection-heuristics** | 1.0.0 | 模型选择启发式规则与决策指南 | 模型训练 |
 | **afrexai-ml-engineering** | 1.0.0 | ML 工程最佳实践、模型选择、实验管理 | 特征工程、模型训练 |
 | **ml-model-eval-benchmark** | 0.1.0 | 模型评估基准、对比实验设计 | 模型训练、模型评估 |
 
@@ -153,7 +180,7 @@ assets/{session_id}/
 ## 项目结构
 
 ```
-AutoMLByLLM/
+AutoMLByLLMHarness/
 ├── automl_react/                    # 核心代码库
 │   ├── agents/                      # 各阶段 Agent 实现
 │   │   ├── data_analysis_agent.py   #   问题定义
@@ -165,7 +192,7 @@ AutoMLByLLM/
 │   │   ├── model_training_agent.py  #   模型训练
 │   │   └── model_evaluation_agent.py#   模型评估
 │   ├── api/
-│   │   └── main.py                  # FastAPI 主入口（20 个端点）
+│   │   └── main.py                  # FastAPI 主入口（20+ 个端点）
 │   ├── assets/
 │   │   └── asset_manager.py         # 会话资产管理
 │   ├── config/
@@ -178,9 +205,22 @@ AutoMLByLLM/
 │   ├── core/
 │   │   ├── react_agent.py           # ReAct Agent 核心循环
 │   │   ├── memory.py                # 对话记忆管理
-│   │   └── observation.py           # 观察结果表示
+│   │   ├── observation.py           # 观察结果表示
+│   │   ├── middleware.py            # 中间件基类与迭代上下文
+│   │   └── middlewares/             # 中间件实现
+│   │       ├── summarization_middleware.py  # 记忆上下文优化
+│   │       ├── logging_middleware.py        # LLM 调用日志
+│   │       ├── error_handling_middleware.py  # 错误恢复
+│   │       ├── token_monitor_middleware.py   # Token 监控
+│   │       └── timeout_middleware.py         # 超时管理
 │   ├── evaluation/
 │   │   └── model_evaluator.py       # 评估指标计算
+│   ├── llm/                         # LLM 提供者管理
+│   │   ├── provider_factory.py      # 提供者工厂（统一接口）
+│   │   └── providers/               # 具体提供者实现
+│   │       ├── openai_provider.py            # OpenAI 原生
+│   │       ├── openai_compatible_provider.py # OpenAI 兼容（Kimi、DeepSeek 等）
+│   │       └── anthropic_provider.py         # Anthropic Claude
 │   ├── logger/
 │   │   └── llm_logger.py            # LLM 调用日志（JSONL）
 │   ├── report/
@@ -200,7 +240,8 @@ AutoMLByLLM/
 │   │   ├── code_generator.py        # 代码生成与验证
 │   │   ├── codeact_agent.py         # CodeAct 迭代生成执行
 │   │   ├── code_executor.py         # 代码执行器
-│   │   └── subprocess_executor.py   # 隔离子进程执行（超时/崩溃隔离）
+│   │   ├── subprocess_executor.py   # 隔离子进程执行（超时/崩溃隔离）
+│   │   └── sandbox.py               # 沙箱执行环境
 │   └── workflow/
 │       └── workflow_state.py        # 工作流状态机（11 个状态）
 │
@@ -209,14 +250,12 @@ AutoMLByLLM/
 │
 ├── skills/                          # 专业知识包
 │   ├── data-analysis-1.0.2/
+│   ├── feature-engineering-patterns-1.0.0/
+│   ├── model-selection-heuristics-1.0.0/
 │   ├── afrexai-ml-engineering-1.0.0/
 │   └── ml-model-eval-benchmark-0.1.0/
 │
 ├── tests/                           # 测试文件
-│   ├── test_new_tools.py
-│   ├── test_p3.py
-│   ├── test_plan_revision.py
-│   └── test_subprocess_executor.py
 │
 ├── logs/                            # 运行时日志
 │   └── llm_calls/                   # LLM 调用日志（per session）
@@ -233,6 +272,8 @@ AutoMLByLLM/
 | 领域 | 技术 |
 |------|------|
 | **Agent 架构** | ReAct (Reasoning + Acting) + CodeAct（迭代代码生成执行） |
+| **中间件系统** | 自定义中间件链（摘要、日志、错误处理、Token 监控、超时） |
+| **LLM 提供者** | 工厂模式：OpenAI / OpenAI 兼容（Kimi、DeepSeek、通义千问）/ Anthropic Claude |
 | **Web 框架** | FastAPI + Uvicorn |
 | **流式通信** | Server-Sent Events (SSE) |
 | **前端** | 原生 HTML/CSS/JS + marked.js (Markdown) + highlight.js (代码高亮) |
@@ -240,8 +281,7 @@ AutoMLByLLM/
 | **机器学习** | Scikit-learn |
 | **可视化** | Matplotlib + Seaborn |
 | **配置管理** | PyYAML（支持 `${ENV_VAR}` / `${ENV_VAR:default}` 环境变量引用） |
-| **LLM 支持** | OpenAI 兼容 API（Kimi、DeepSeek、GPT、Claude、通义千问等） |
-| **代码执行** | 隔离子进程（pickle 序列化，超时控制，崩溃隔离） |
+| **代码执行** | 隔离子进程 + 沙箱环境（pickle 序列化，超时控制，崩溃隔离） |
 | **序列化** | Joblib（模型持久化）、JSON（状态/配置） |
 
 ## 快速开始
@@ -249,7 +289,7 @@ AutoMLByLLM/
 ### 环境要求
 
 - Python 3.9+
-- 支持 OpenAI 兼容 API 的 LLM 服务
+- 支持 OpenAI 兼容 API 的 LLM 服务（或 Anthropic Claude API）
 
 ### 1. 安装依赖
 
@@ -288,6 +328,7 @@ export MOONSHOT_API_KEY="your-api-key"
 export OPENAI_API_KEY="your-api-key"
 export DEEPSEEK_API_KEY="your-api-key"
 export DASHSCOPE_API_KEY="your-api-key"
+export ANTHROPIC_API_KEY="your-api-key"
 ```
 
 ### 3. 启动服务
@@ -343,6 +384,8 @@ open frontend/index.html
 | `/report/generate` | POST | 生成建模分析报告（Markdown + HTML） |
 | `/report/{session_id}/summary` | GET | 获取报告摘要 |
 | `/pipeline/generate` | POST | 生成全流程可复现 Python 脚本 |
+| **预测** | | |
+| `/predict` | POST | 使用已训练模型对新数据进行预测 |
 | **日志** | | |
 | `/logs/{session_id}/llm` | GET | 获取 LLM 调用日志 |
 
@@ -396,6 +439,14 @@ logging:
   enabled: true
   log_dir: "logs/llm_calls"
   log_format: "jsonl"
+
+streaming:
+  enabled: true
+  chunk_size: 100
+
+retry:
+  max_retries: 3
+  backoff: "exponential"
 ```
 
 #### 3. 工作流配置 (`automl_react/config/workflow_config.yaml`)
@@ -477,7 +528,8 @@ assets:
 | **可审计与可复现** | JSONL 日志 + 资产保存 + 状态持久化，支持断点恢复 |
 | **配置驱动** | YAML 管理 Prompt 和模型，支持阶段级模型覆盖 |
 | **工程最佳实践** | 严格区分数据集，防止泄漏，代码隔离执行 |
-| **崩溃隔离** | LLM 生成的代码在子进程执行，主进程不受影响 |
+| **崩溃隔离** | LLM 生成的代码在子进程/沙箱执行，主进程不受影响 |
+| **中间件扩展** | 通过中间件链灵活插入横切关注点（日志、监控、限流等） |
 
 ## 许可证
 
