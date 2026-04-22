@@ -9,8 +9,13 @@ from typing import Any, Dict, List
 
 import pandas as pd
 import numpy as np
+from pydantic import BaseModel, Field
 
 from .base_tool import BaseTool, ToolResult
+
+
+class DataProfileInput(BaseModel):
+    file_path: str = Field(..., description="数据文件路径（CSV格式）")
 
 
 class DataProfileTool(BaseTool):
@@ -22,12 +27,7 @@ class DataProfileTool(BaseTool):
         "异常值检测（IQR方法）、重复值分析、数据类型和分布分析。"
         "返回结构化的质量报告。"
     )
-    parameters = {
-        "file_path": {
-            "type": "string",
-            "description": "数据文件路径（CSV格式）"
-        }
-    }
+    input_model = DataProfileInput
 
     def execute(self, file_path: str = "", **kwargs) -> ToolResult:
         """执行数据质量分析"""

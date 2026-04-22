@@ -78,9 +78,10 @@ data_cleaning:
     </context>
 
     <output_contract>
-    代码必须通过 sys.argv 接收输入输出路径，不得硬编码路径：
+    代码必须通过 sys.argv 接收路径，不得硬编码路径：
     - sys.argv[1]: 输入数据路径（默认: {data_path}）
     - sys.argv[2]: 输出数据路径（默认: {cleaned_data_path}）
+    - sys.argv[3]: 训练集数据路径（默认: {data_path}），用于计算填充值和截断阈值
     必须输出的统计: 清洗前后行数/列数对比
     </output_contract>
 
@@ -89,6 +90,7 @@ data_cleaning:
        import sys
        input_path = sys.argv[1] if len(sys.argv) > 1 else "{data_path}"
        output_path = sys.argv[2] if len(sys.argv) > 2 else "{cleaned_data_path}"
+       train_path = sys.argv[3] if len(sys.argv) > 3 else "{data_path}"
     2. 使用 pandas 进行数据处理，代码完整可执行，包含所有必要导入
     3. 从 input_path 读取数据，保存清洗后的数据到 output_path
     4. 本阶段仅用无状态清洗方法，复杂方法（如 KNN 填充）留给后续阶段
@@ -100,9 +102,10 @@ data_cleaning:
 
     <reusability>
     此代码将被复用于验证集和测试集的清洗（通过不同的 sys.argv 参数调用）。因此：
-    - 所有清洗参数（填充值、截断阈值等）必须硬编码为基于训练集计算的常量，不得从输入数据动态计算
+    - 所有填充值、截断阈值等统计量必须从 train_path 指向的训练集动态计算（如中位数、四分位数、众数），不得在代码中硬编码方案中的数字
+    - 计算完成后将这些值作为变量应用到 input_path 指向的数据上
     - 代码必须是无状态的：相同逻辑对不同大小的输入数据都不应报错
-    - 不要在代码中读取其他文件，只处理 input_path 指定的单个文件
+    - 除 train_path 外，不要读取其他文件
     </reusability>
 
     <common_pitfalls>
@@ -337,9 +340,10 @@ feature_engineering:
     </context>
 
     <output_contract>
-    代码必须通过 sys.argv 接收输入输出路径，不得硬编码路径：
+    代码必须通过 sys.argv 接收路径，不得硬编码路径：
     - sys.argv[1]: 输入数据路径（默认: {data_path}）
     - sys.argv[2]: 输出数据路径（默认: {features_data_path}）
+    - sys.argv[3]: 训练集数据路径（默认: {data_path}），用于拟合编码器和计算统计量
     必须输出的变量: 新生成的特征列表
     </output_contract>
 
@@ -348,6 +352,7 @@ feature_engineering:
        import sys
        input_path = sys.argv[1] if len(sys.argv) > 1 else "{data_path}"
        output_path = sys.argv[2] if len(sys.argv) > 2 else "{features_data_path}"
+       train_path = sys.argv[3] if len(sys.argv) > 3 else "{data_path}"
     2. 使用 pandas 进行特征工程，可选用 scikit-learn、category_encoders 等库
     3. 代码完整可执行，包含所有必要导入
     4. 从 input_path 读取数据，保存特征工程结果到 output_path
@@ -360,10 +365,10 @@ feature_engineering:
 
     <reusability>
     此代码将被复用于验证集和测试集（通过不同的 sys.argv 参数调用）。因此：
-    - 所有基于训练数据的统计量（目标编码均值、频率阈值等）必须硬编码为常量，不得从当前输入数据动态计算（防止数据泄漏）
+    - 所有基于训练数据的统计量（目标编码均值、频率阈值等）必须从 train_path 指向的训练集动态计算，不得在代码中硬编码数字常量
     - 不得对目标列做目标编码——验证集/测试集的目标列仅用于评估，不参与特征构建
     - 使用 sklearn OneHotEncoder(handle_unknown='ignore') 或固定列列表进行独热编码，确保不同大小数据集产生相同的列结构
-    - 只处理 input_path 指定的单个输入文件，不要读取其他文件
+    - 除 train_path 外，不要读取其他文件
     - 代码必须兼容缺少目标列的输入数据（验证集/测试集场景）
     </reusability>
 
@@ -595,7 +600,7 @@ model_training:
        - 测试集: {test_split_path}
     2. 默认使用除目标列外的所有特征，仅排除方案中明确列出的排除项（常量列、泄露特征）；必须排除 Id/ID/index 等行标识列（它们与目标无因果关系，属于数据泄漏）
     3. 不得重新切分数据，直接消费上述三个文件
-    4. 如果数据含分类特征，用稳健方式处理（ColumnTransformer + OneHotEncoder、CatBoost 原生类别等）
+    4. 输入数据来自特征工程阶段的输出，所有分类变量已完成编码（one-hot、序数编码、目标编码等），不得在 preprocessor 中再次对任何列做 OneHotEncoder 或 OrdinalEncoder 等编码变换。preprocessor 仅用于数值特征的缩放（如 StandardScaler），若不需要缩放可将 preprocessor 设为 None
     5. valid 只用于模型选择与调参，test 只用于最终评估
     6. 若某个文件不存在或为空，安全跳过并记录日志（如无 valid 则用 test 做调参）
 

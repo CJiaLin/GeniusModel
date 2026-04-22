@@ -1,0 +1,15 @@
+{
+  "ownerId": "automl-harness",
+  "slug": "feature-engineering-patterns",
+  "version": "1.0.0",
+  "publishedAt": 1713168000000,
+  "tags": ["feature-engineering", "ml-patterns", "ml-engineering"],
+  "summary": "特征工程常用模式与最佳实践，涵盖数值变换、类别编码、时间特征、交互特征等",
+  "sections": {
+    "overview": "SKILL.md",
+    "numeric-transforms": "numeric-transforms.md",
+    "categorical-encoding": "categorical-encoding.md",
+    "datetime-features": "datetime-features.md",
+    "interaction-features": "interaction-features.md"
+  }
+}

@@ -53,8 +53,18 @@ class CodeActAgent:
         # 子进程执行模式（可通过环境变量 CODEACT_USE_SUBPROCESS=0 关闭）
         self.use_subprocess = use_subprocess and os.environ.get("CODEACT_USE_SUBPROCESS", "1") != "0"
         if self.use_subprocess:
-            from .subprocess_executor import SubprocessCodeExecutor
-            self.subprocess_executor = SubprocessCodeExecutor(timeout=timeout)
+            from .sandbox import SandboxExecutor
+            # 从配置读取沙盒参数
+            try:
+                exec_config = self.config_loader.get_workflow_config("execution") or {}
+            except KeyError:
+                exec_config = {}
+            self.subprocess_executor = SandboxExecutor(
+                mode=exec_config.get("sandbox_mode", "subprocess"),
+                timeout=timeout,
+                memory_limit_mb=exec_config.get("memory_limit_mb", 2048),
+                cpu_time_limit=exec_config.get("cpu_time_limit", timeout),
+            )
     
     def generate_and_execute(
         self,

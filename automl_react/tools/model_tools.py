@@ -6,7 +6,9 @@
 
 import pandas as pd
 import numpy as np
-from typing import Any, Dict
+from typing import Any, Dict, Literal
+
+from pydantic import BaseModel, Field
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, r2_score
@@ -14,33 +16,25 @@ from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, r2_sco
 from .base_tool import BaseTool, ToolResult
 
 
+class ModelTrainerInput(BaseModel):
+    file_path: str = Field(..., description="数据文件路径")
+    target_column: str = Field(..., description="目标列名")
+    task_type: Literal["classification", "regression"] = Field(
+        ..., description="任务类型 (classification/regression)"
+    )
+    test_size: float = Field(0.2, description="测试集比例，默认 0.2", ge=0.0, le=1.0)
+
+
 class ModelTrainerTool(BaseTool):
     """
     模型训练工具
-    
+
     自动训练机器学习模型
     """
-    
+
     name = "train_model"
     description = "训练机器学习模型，支持分类和回归任务"
-    parameters = {
-        "file_path": {
-            "type": "string",
-            "description": "数据文件路径"
-        },
-        "target_column": {
-            "type": "string",
-            "description": "目标列名"
-        },
-        "task_type": {
-            "type": "string",
-            "description": "任务类型 (classification/regression)"
-        },
-        "test_size": {
-            "type": "number",
-            "description": "测试集比例，默认 0.2"
-        }
-    }
+    input_model = ModelTrainerInput
     
     def execute(
         self,

@@ -205,10 +205,10 @@ class PipelineGenerator:
         return "\n".join(result)
 
     def _wrap_as_function(self, code: str, func_name: str) -> str:
-        """将脚本代码包装为 def func_name(input_path, output_path): 函数。"""
+        """将脚本代码包装为 def func_name(input_path, output_path, train_path=None): 函数。"""
         body = self._strip_scaffolding(code)
         if not body.strip():
-            return f"def {func_name}(input_path, output_path):\n    pass\n"
+            return f"def {func_name}(input_path, output_path, train_path=None):\n    pass\n"
         # 如果脚本内部也定义了同名函数，重命名为 _inner_<func_name>（应已被生成阶段拦截）
         inner_pattern = re.compile(rf'^(def\s+){func_name}(\s*\()', re.MULTILINE)
         if inner_pattern.search(body):
@@ -221,11 +221,13 @@ class PipelineGenerator:
                 f'{inner_name}(',
                 body,
             )
+        # train_path 未传入时默认回退到 input_path（兼容旧代码不使用 train_path 的场景）
+        fallback_line = "    if train_path is None:\n        train_path = input_path\n"
         indented = "\n".join(
             "    " + line if line.strip() else ""
             for line in body.splitlines()
         )
-        return f"def {func_name}(input_path, output_path):\n{indented}\n"
+        return f"def {func_name}(input_path, output_path, train_path=None):\n{fallback_line}{indented}\n"
 
     def _parameterize_training_code(self, code: str) -> str:
         """从 model_training.py 提取核心训练逻辑，去掉路径赋值和脚手架。"""
@@ -313,7 +315,7 @@ AutoML 全流程 Pipeline 脚本
 
 使用说明:
   训练模式:  python pipeline.py --mode train --data raw_data.csv
-  推理模式:  python pipeline.py --mode predict --data new_data.csv --model output/model.pkl
+  推理模式:  python pipeline.py --mode predict --data new_data.csv --model output/model.pkl --train-data raw_data.csv
 """
 
 {imports_block}
@@ -330,9 +332,54 @@ def parse_args():
     parser.add_argument("--mode", choices=["train", "predict"], required=True)
     parser.add_argument("--data", required=True, help="输入数据路径 (CSV)")
     parser.add_argument("--model", default=None, help="模型路径 (predict 模式必需)")
+    parser.add_argument("--train-data", default=None, help="训练集路径 (predict 模式下用于计算统计量)")
     parser.add_argument("--output-dir", default="output", help="输出目录")
     parser.add_argument("--target", default="{target_column}", help="目标列名")
     return parser.parse_args()
+
+
+# ============================================
+# Schema 验证
+# ============================================
+def validate_schema(data_path, schema_path, strict=False):
+    """验证输入数据是否匹配训练时的 schema"""
+    if not os.path.exists(schema_path):
+        print("WARNING: schema.json 不存在，跳过验证")
+        return True
+
+    with open(schema_path) as f:
+        schema = json.load(f)
+
+    df_sample = pd.read_csv(data_path, nrows=100)
+    issues = []
+
+    # 1. 检查必需列（排除目标列）
+    expected = set(schema["columns"]) - {{schema.get("target_column", "")}}
+    actual = set(df_sample.columns)
+    missing = expected - actual
+    if missing:
+        issues.append(f"FAIL: 缺少 {{len(missing)}} 列: {{sorted(missing)[:10]}}")
+
+    # 2. 检查未见类别值
+    cat_values = schema.get("categorical_values", {{}})
+    for col, known in cat_values.items():
+        if col in df_sample.columns:
+            unseen = set(df_sample[col].dropna().unique()) - set(known)
+            if unseen:
+                issues.append(f"WARN: 列 '{{col}}' 存在 {{len(unseen)}} 个未见类别: {{sorted(str(v) for v in unseen)[:5]}}")
+
+    # 3. 打印结果
+    if not issues:
+        print("Schema 验证通过")
+        return True
+
+    for issue in issues:
+        print(f"  {{issue}}")
+
+    has_fail = any(i.startswith("FAIL") for i in issues)
+    if has_fail and strict:
+        return False
+    return not has_fail
 
 ''')
 
@@ -384,6 +431,21 @@ def run_training(args):
     test_df.to_csv(test_raw_path, index=False)
     print(f"切分完成: train={{len(train_df)}}, valid={{len(valid_df)}}, test={{len(test_df)}}")
 
+    # ── 保存数据 Schema (用于 predict 模式验证) ──
+    _cat_cols = df.select_dtypes(include=["object", "category"]).columns
+    _schema = {{
+        "columns": list(df.columns),
+        "target_column": target_column,
+        "dtypes": {{col: str(dtype) for col, dtype in df.dtypes.items()}},
+        "categorical_values": {{
+            col: sorted([str(v) for v in df[col].dropna().unique()])[:500]
+            for col in _cat_cols
+        }},
+    }}
+    with open(str(output_dir / "schema.json"), "w") as _f:
+        json.dump(_schema, _f, indent=2, ensure_ascii=False)
+    print(f"  Schema 已保存至: {{output_dir / 'schema.json'}}")
+
     # ── 数据清洗 ──
     print("\\n" + "=" * 60)
     print("[2/5] 数据清洗")
@@ -391,11 +453,11 @@ def run_training(args):
     cleaned_train = str(data_dir / "cleaned_train.csv")
     cleaned_valid = str(data_dir / "cleaned_valid.csv")
     cleaned_test = str(data_dir / "cleaned_test.csv")
-    clean_data(train_raw_path, cleaned_train)
+    clean_data(train_raw_path, cleaned_train, train_raw_path)
     print("  训练集清洗完成")
-    clean_data(valid_raw_path, cleaned_valid)
+    clean_data(valid_raw_path, cleaned_valid, train_raw_path)
     print("  验证集清洗完成")
-    clean_data(test_raw_path, cleaned_test)
+    clean_data(test_raw_path, cleaned_test, train_raw_path)
     print("  测试集清洗完成")
 
     # ── 特征工程 ──
@@ -405,11 +467,11 @@ def run_training(args):
     features_train = str(data_dir / "features_train.csv")
     features_valid = str(data_dir / "features_valid.csv")
     features_test = str(data_dir / "features_test.csv")
-    engineer_features(cleaned_train, features_train)
+    engineer_features(cleaned_train, features_train, cleaned_train)
     print("  训练集特征工程完成")
-    engineer_features(cleaned_valid, features_valid)
+    engineer_features(cleaned_valid, features_valid, cleaned_train)
     print("  验证集特征工程完成")
-    engineer_features(cleaned_test, features_test)
+    engineer_features(cleaned_test, features_test, cleaned_train)
     print("  测试集特征工程完成")
 
     # ── 模型训练 ──
@@ -495,8 +557,18 @@ def run_predict(args):
     model_path = args.model
     target_column = args.target
 
+    # ── Schema 验证 ──
     print("=" * 60)
-    print("[1/4] 加载模型")
+    print("[1/5] Schema 验证")
+    print("=" * 60)
+    schema_path = str(output_dir / "schema.json")
+    if not validate_schema(args.data, schema_path):
+        print("ERROR: Schema 验证失败，中止预测")
+        sys.exit(1)
+
+    # ── 加载模型 ──
+    print("\\n" + "=" * 60)
+    print("[2/5] 加载模型")
     print("=" * 60)
     try:
         import joblib
@@ -506,23 +578,36 @@ def run_predict(args):
             model_artifact = pickle.load(f)
     print(f"模型加载成功: {model_path}")
 
+    # ── 解析训练集路径 ──
+    train_data_path = args.train_data
+    if train_data_path is None:
+        print("WARNING: 未指定 --train-data，使用预测数据自身计算统计量（不推荐）")
+        train_data_path = args.data
+
     # ── 数据清洗 ──
     print("\\n" + "=" * 60)
-    print("[2/4] 数据清洗")
+    print("[3/5] 数据清洗")
     print("=" * 60)
     cleaned_path = str(tmp_dir / "cleaned.csv")
-    clean_data(args.data, cleaned_path)
+    clean_data(args.data, cleaned_path, train_data_path)
+
+    # 清洗训练集参考（供特征工程计算统计量）
+    cleaned_train_ref = str(tmp_dir / "cleaned_train_ref.csv")
+    if train_data_path != args.data:
+        clean_data(train_data_path, cleaned_train_ref, train_data_path)
+    else:
+        cleaned_train_ref = cleaned_path
 
     # ── 特征工程 ──
     print("\\n" + "=" * 60)
-    print("[3/4] 特征工程")
+    print("[4/5] 特征工程")
     print("=" * 60)
     features_path = str(tmp_dir / "features.csv")
-    engineer_features(cleaned_path, features_path)
+    engineer_features(cleaned_path, features_path, cleaned_train_ref)
 
     # ── 预测 ──
     print("\\n" + "=" * 60)
-    print("[4/4] 模型预测")
+    print("[5/5] 模型预测")
     print("=" * 60)
     df = pd.read_csv(features_path)
 

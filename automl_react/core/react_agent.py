@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from .memory import Memory, MemoryType
 from .observation import Observation, ObservationType
+from .middleware import Middleware, MiddlewareChain, IterationContext
 from ..tools.base_tool import BaseTool, ToolResult
 from ..config import ConfigLoader, get_config_loader
 from ..logger import LLMLogger, get_llm_logger
@@ -57,7 +58,8 @@ class ReActAgent(ABC):
         llm: Any = None,
         session_id: str = None,
         max_iterations: int = None,
-        verbose: bool = False
+        verbose: bool = False,
+        middlewares: List[Middleware] = None,
     ):
         self.llm = llm
         self.session_id = session_id or "default"
@@ -67,22 +69,55 @@ class ReActAgent(ABC):
         self._current_iteration = 0
         self._paused_for_confirmation = False
         self._confirmation_callback: Optional[Callable] = None
-        
+
         # 初始化配置加载器
         self.config_loader = get_config_loader()
-        
+
         # 从配置加载参数
         workflow_config = self.config_loader.get_workflow_config("react_agent") or {}
         self.max_iterations = max_iterations or workflow_config.get("max_iterations", 15)
-        
+
         # 初始化日志记录器
         self.llm_logger = get_llm_logger(session_id=self.session_id)
-        
+
         # 初始化资产管理器
         self.asset_manager = get_asset_manager(session_id=self.session_id)
-        
+
+        # 初始化中间件链
+        self._middleware_chain = MiddlewareChain(
+            middlewares if middlewares is not None else self._default_middlewares()
+        )
+
         # 注册默认工具
         self._register_default_tools()
+
+    def _default_middlewares(self) -> List[Middleware]:
+        """构建默认中间件列表，复现原有行为。"""
+        from .middlewares import (
+            LoggingMiddleware,
+            ErrorHandlingMiddleware,
+            TokenMonitorMiddleware,
+            TimeoutMiddleware,
+        )
+        from .middlewares.summarization_middleware import SummarizationMiddleware
+
+        # 从配置读取超时参数
+        workflow_config = self.config_loader.get_workflow_config("react_agent") or {}
+        total_timeout = workflow_config.get("timeout", 600)
+
+        return [
+            SummarizationMiddleware(
+                memory=self.memory,
+                llm=self.llm,
+                max_context_tokens=8000,
+                summarization_threshold=0.75,
+                keep_recent=5,
+            ),
+            LoggingMiddleware(self.llm_logger, self.config_loader),
+            ErrorHandlingMiddleware(verbose=self.verbose),
+            TokenMonitorMiddleware(),
+            TimeoutMiddleware(total_timeout=total_timeout),
+        ]
     
     def register_tool(self, name: str, tool: BaseTool):
         """注册工具"""
@@ -139,10 +174,11 @@ class ReActAgent(ABC):
         # 工具描述
         tool_descriptions = []
         for name, tool in self.tools.items():
+            schema = tool.get_schema()
             tool_descriptions.append(
                 f"工具: {name}\n"
                 f"  描述: {tool.description}\n"
-                f"  参数: {json.dumps(tool.parameters, ensure_ascii=False)}"
+                f"  参数: {json.dumps(schema.get('parameters', {}), ensure_ascii=False)}"
             )
         tools_text = "\n\n".join(tool_descriptions) if tool_descriptions else "无可用工具"
         
@@ -175,6 +211,7 @@ class ReActAgent(ABC):
         memory_context = self.memory.get_short_term_context(
             include_user_messages=False,
             include_assistant_messages=False,
+            skip_last_observation=bool(observation and observation.strip()),
         )
 
         user_sections: List[str] = []
@@ -289,7 +326,7 @@ class ReActAgent(ABC):
         tool = self.tools[tool_name]
         
         try:
-            result = tool.execute(**tool_input)
+            result = tool.execute_validated(**tool_input)
             
             if result.status.value == "success":
                 return Observation.from_tool_result(
@@ -310,54 +347,31 @@ class ReActAgent(ABC):
     
     def _call_llm(self, prompt: Any, stage: str = "", metadata: Dict[str, Any] = None) -> Any:
         """
-        调用 LLM 并记录日志（使用流式输出）
-        
-        Args:
-            prompt: 提示词
-            stage: 工作流阶段
-            
-        Returns:
-            LLM 响应
+        调用 LLM（使用流式输出）
+
+        日志记录已交由 LoggingMiddleware 处理。
         """
         if self.llm is None:
             raise ValueError("LLM 未设置")
-        
-        start_time = datetime.now()
-        
+
         # 使用流式输出
         full_response = ""
         print(f"[LLM] 开始流式输出 (stage: {stage})...")
-        
+
         try:
             for chunk in self.llm.stream(prompt):
                 if chunk.content:
                     content = chunk.content
                     full_response += content
-                    # 实时打印输出
                     print(content, end="", flush=True)
         except Exception as e:
             # 如果流式输出失败，回退到同步调用
             print(f"\n[LLM] 流式输出失败，回退到同步调用: {e}")
             response = self.llm.invoke(prompt)
             full_response = response.content if hasattr(response, 'content') else str(response)
-        
+
         print()  # 换行
-        
-        # 获取模型配置
-        llm_config = self.config_loader.get_llm_config()
-        model_name = llm_config.get("model_name", "unknown")
-        provider = llm_config.get("provider", "unknown")
-        
-        # 记录日志
-        self.llm_logger.log_call(
-            model_name=model_name,
-            provider=provider,
-            input_content=self._serialize_llm_input(prompt),
-            output_content=full_response,
-            stage=stage,
-            metadata=metadata
-        )
-        
+
         # 返回与 invoke 相同格式的响应对象
         return AIMessage(content=full_response)
     
@@ -458,12 +472,12 @@ class ReActAgent(ABC):
     ) -> Dict[str, Any]:
         """
         运行 ReAct 循环
-        
+
         Args:
             user_input: 用户输入
             context: 额外上下文
             stage: 当前工作流阶段
-            
+
         Returns:
             执行结果
         """
@@ -474,48 +488,66 @@ class ReActAgent(ABC):
 
         # 添加用户输入到记忆
         self.memory.add_user_message(user_input)
-        
+
         # 初始化观察
         observation = ""
-        
+
         for iteration in range(self.max_iterations):
             self._current_iteration = iteration + 1
-            
+
             if self.verbose:
                 print(f"\n--- 迭代 {iteration + 1}/{self.max_iterations} ---")
-            
+
             # 构建提示词
             prompt = self._build_react_messages(user_input, observation)
-            
-            # 调用 LLM（带日志记录）
-            try:
-                response = self._call_llm(
-                    prompt,
-                    stage=stage,
-                    metadata={
-                        "prompt_scope": "final_actual_llm_input",
-                        "prompt_format": "chat_messages_system_user",
-                    }
-                )
-            except Exception as e:
+
+            # 创建迭代上下文
+            ctx = IterationContext(
+                iteration=iteration + 1,
+                max_iterations=self.max_iterations,
+                stage=stage,
+                user_input=user_input,
+                observation=observation,
+                prompt=prompt,
+            )
+
+            # === 中间件: before_llm_call ===
+            ctx = self._middleware_chain.run_before_llm(ctx)
+            if ctx.should_stop:
                 return {
                     "success": False,
-                    "answer": f"LLM 调用失败: {str(e)}",
-                    "iterations": iteration + 1
+                    "answer": ctx.error or "中间件终止执行",
+                    "iterations": iteration + 1,
+                    "metadata": ctx.metadata,
                 }
-            
-            response_text = response.content if hasattr(response, 'content') else str(response)
-            
+
+            # 调用 LLM
+            try:
+                response = self._call_llm(prompt, stage=stage)
+                response_text = response.content if hasattr(response, 'content') else str(response)
+                ctx.llm_response = response_text
+            except Exception as e:
+                ctx = self._middleware_chain.run_on_error(ctx, e)
+                return {
+                    "success": False,
+                    "answer": f"LLM 调用失败: {ctx.error or str(e)}",
+                    "iterations": iteration + 1,
+                    "metadata": ctx.metadata,
+                }
+
+            # === 中间件: after_llm_call ===
+            ctx = self._middleware_chain.run_after_llm(ctx)
+
             if self.verbose:
                 print(f"LLM 响应:\n{response_text}\n")
-            
+
             # 解析思考
             thought = self._parse_thought(response_text)
             if thought:
                 self.memory.add_thought(thought, step=iteration + 1)
                 if self.verbose:
                     print(f"思考: {thought}")
-            
+
             # 检查是否完成
             final_answer = self._parse_final_answer(response_text)
             if final_answer:
@@ -524,41 +556,51 @@ class ReActAgent(ABC):
                     print(f"\n{'='*60}")
                     print(f"[ReActAgent] 任务完成")
                     print(f"{'='*60}\n")
-                
+
                 return {
                     "success": True,
                     "answer": final_answer,
                     "iterations": iteration + 1,
-                    "memory": self.memory.to_messages()
+                    "memory": self.memory.to_messages(),
+                    "metadata": ctx.metadata,
                 }
-            
+
             # 解析行动
             action = self._parse_action(response_text)
             if action:
                 tool_name, tool_input = action
                 self.memory.add_action(f"使用工具: {tool_name}", tool_input)
-                
+
                 if self.verbose:
                     print(f"行动: {tool_name}")
                     print(f"行动输入: {tool_input}")
-                
+
+                # === 中间件: before_tool_call ===
+                ctx.tool_name = tool_name
+                ctx.tool_input = tool_input
+                ctx = self._middleware_chain.run_before_tool(ctx)
+
                 # 执行工具
                 obs = self._execute_tool(tool_name, tool_input)
                 observation = obs.to_prompt_text()
                 self.memory.add_observation(observation)
-                
+
+                # === 中间件: after_tool_call ===
+                ctx.tool_result = observation
+                ctx = self._middleware_chain.run_after_tool(ctx)
+
                 if self.verbose:
                     print(f"观察: {observation[:200]}...")
             else:
                 # 没有行动也没有最终答案，可能是格式问题
                 observation = "请按照 ReAct 格式输出：思考 -> 行动/最终答案"
-        
+
         # 达到最大迭代次数
         if self.verbose:
             print(f"\n{'='*60}")
             print(f"[ReActAgent] 达到最大迭代次数")
             print(f"{'='*60}\n")
-        
+
         return {
             "success": False,
             "answer": "达到最大迭代次数，任务未完成",
@@ -568,7 +610,8 @@ class ReActAgent(ABC):
     
     def _register_default_tools(self):
         """注册默认工具（子类应调用 super()._register_default_tools()）"""
-        from ..tools.skill_tools import SkillReadTool
+        from ..tools.skill_tools import SkillReadTool, SkillSearchTool
+        self.register_tool("search_skills", SkillSearchTool())
         self.register_tool("read_skill", SkillReadTool())
     
     def reset(self):

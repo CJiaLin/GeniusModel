@@ -4,10 +4,32 @@
 提供 SkillSearchTool 和 SkillReadTool，让 LLM 在 ReAct 循环中自主检索和阅读技能知识
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
 
 from .base_tool import BaseTool, ToolResult
 from ..skills_loader import get_skill_loader
+
+
+class SkillSearchInput(BaseModel):
+    query: str = Field("", description="搜索关键词（支持中英文）")
+    tags: Optional[List[str]] = Field(
+        None, description="可选的标签过滤（如 ['ml-engineering', 'data-analysis']）"
+    )
+    stage: Optional[str] = Field(
+        None, description="可选的工作流阶段名称，自动匹配阶段相关技能（如 'data_cleaning', 'feature_engineering'）"
+    )
+
+
+# 工作流阶段到技能标签的映射
+_STAGE_TAG_MAP: Dict[str, List[str]] = {
+    "data_cleaning": ["data-analysis", "data-cleaning"],
+    "data_exploration": ["data-analysis", "data-exploration"],
+    "feature_engineering": ["ml-engineering", "feature-engineering", "ml-patterns"],
+    "model_training": ["ml-engineering", "model-selection", "ml-patterns"],
+    "model_evaluation": ["model-evaluation", "ml-engineering"],
+}
 
 
 class SkillSearchTool(BaseTool):
@@ -15,38 +37,33 @@ class SkillSearchTool(BaseTool):
 
     name = "search_skills"
     description = (
-        "搜索可用的专业知识技能包。根据关键词或标签搜索，"
+        "搜索可用的专业知识技能包。根据关键词、标签或工作流阶段搜索，"
         "返回匹配的技能名称、摘要和可用章节列表。"
         "示例关键词: 'feature engineering', '数据清洗', 'model evaluation', 'benchmarking'"
     )
-    parameters = {
-        "query": {
-            "type": "string",
-            "description": "搜索关键词（支持中英文）"
-        },
-        "tags": {
-            "type": "array",
-            "description": "可选的标签过滤（如 ['ml-engineering', 'data-analysis']）",
-            "items": {"type": "string"}
-        }
-    }
+    input_model = SkillSearchInput
 
-    def execute(self, query: str = "", tags: List[str] = None, **kwargs) -> ToolResult:
+    def execute(self, query: str = "", tags: List[str] = None, stage: str = None, **kwargs) -> ToolResult:
         """执行技能搜索"""
         try:
             loader = get_skill_loader()
             loader.load_all_skills()
+
+            # 如果指定了阶段，合并阶段对应的标签
+            effective_tags = list(tags) if tags else []
+            if stage and stage in _STAGE_TAG_MAP:
+                effective_tags.extend(_STAGE_TAG_MAP[stage])
 
             matched_names = set()
 
             if query:
                 matched_names.update(loader.search_skills(query))
 
-            if tags:
-                matched_names.update(loader.search_by_tags(tags))
+            if effective_tags:
+                matched_names.update(loader.search_by_tags(effective_tags))
 
             # 如果没有搜索条件，返回所有技能
-            if not query and not tags:
+            if not query and not effective_tags:
                 matched_names.update(loader.load_all_skills().keys())
 
             results = []
@@ -77,6 +94,13 @@ class SkillSearchTool(BaseTool):
             return ToolResult.error(f"技能搜索失败: {e}")
 
 
+class SkillReadInput(BaseModel):
+    skill_name: str = Field(..., description="技能包名称（如 'data-analysis-1.0.2'）")
+    section: str = Field(
+        "", description="可选的章节名称（如 'techniques', 'phase2-data-engineering'）。不指定则返回技能概述"
+    )
+
+
 class SkillReadTool(BaseTool):
     """读取指定技能包内容的工具"""
 
@@ -85,26 +109,12 @@ class SkillReadTool(BaseTool):
         "读取指定技能包的详细内容。可以读取完整概述或指定章节。"
         "先用 search_skills 找到技能名和章节，再用此工具读取具体内容。"
     )
-    parameters = {
-        "skill_name": {
-            "type": "string",
-            "description": "技能包名称（如 'data-analysis-1.0.2'）"
-        },
-        "section": {
-            "type": "string",
-            "description": "可选的章节名称（如 'techniques', 'phase2-data-engineering'）。不指定则返回技能概述"
-        },
-        "max_length": {
-            "type": "integer",
-            "description": "返回内容最大字符数，默认 3000"
-        }
-    }
+    input_model = SkillReadInput
 
     def execute(
         self,
         skill_name: str = "",
         section: str = "",
-        max_length: int = 3000,
         **kwargs
     ) -> ToolResult:
         """读取技能内容"""
@@ -131,10 +141,6 @@ class SkillReadTool(BaseTool):
                     )
             else:
                 content = skill.content or "(该技能无概述内容)"
-
-            # 截断
-            if len(content) > max_length:
-                content = content[:max_length] + f"\n\n... [内容已截断，共 {len(content)} 字符]"
 
             # 添加参考警告
             header = (

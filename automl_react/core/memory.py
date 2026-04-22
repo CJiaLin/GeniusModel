@@ -103,13 +103,30 @@ class Memory:
         self,
         include_user_messages: bool = True,
         include_assistant_messages: bool = True,
+        skip_last_observation: bool = False,
     ) -> str:
-        """获取短期记忆上下文"""
+        """获取短期记忆上下文
+
+        Args:
+            include_user_messages: 是否包含用户消息
+            include_assistant_messages: 是否包含助手消息
+            skip_last_observation: 是否跳过最后一条观察记录（避免与显式传入的 observation 重复）
+        """
         if not self.short_term:
             return ""
-        
+
+        # 确定需要跳过的观察条目索引
+        skip_idx = None
+        if skip_last_observation:
+            for i in range(len(self.short_term) - 1, -1, -1):
+                if self.short_term[i].type == MemoryType.OBSERVATION:
+                    skip_idx = i
+                    break
+
         lines = ["## 对话历史"]
-        for entry in self.short_term:
+        for i, entry in enumerate(self.short_term):
+            if i == skip_idx:
+                continue
             if entry.type == MemoryType.USER_MESSAGE:
                 if include_user_messages:
                     lines.append(f"用户: {entry.content}")
@@ -122,7 +139,7 @@ class Memory:
                 lines.append(f"动作: {entry.content}")
             elif entry.type == MemoryType.OBSERVATION:
                 lines.append(f"观察: {entry.content}")
-        
+
         if len(lines) == 1:
             return ""
 
@@ -164,7 +181,60 @@ class Memory:
     def set_long_term(self, key: str, value: Any):
         """设置长期记忆"""
         self.long_term[key] = value
-    
+
     def get_long_term(self, key: str) -> Optional[Any]:
         """获取长期记忆"""
         return self.long_term.get(key)
+
+    def estimate_tokens(self, encoding_name: str = "cl100k_base") -> int:
+        """
+        估算短期记忆的 token 数量。
+
+        使用 tiktoken（若可用），否则降级为字符数 / 4 的粗略估算。
+        """
+        text = self.get_short_term_context()
+        if not text:
+            return 0
+        try:
+            import tiktoken
+            enc = tiktoken.get_encoding(encoding_name)
+            return len(enc.encode(text))
+        except Exception:
+            return len(text) // 4
+
+    def summarize(
+        self,
+        summarizer_fn,
+        keep_recent: int = 5,
+    ):
+        """
+        压缩短期记忆：将较旧的条目摘要为单条 SYSTEM_MESSAGE。
+
+        Args:
+            summarizer_fn: 接受 str 返回 str 的摘要函数（通常由 LLM 完成）
+            keep_recent: 保留最近 N 条条目不做摘要
+        """
+        if len(self.short_term) <= keep_recent:
+            return  # 条目不够多，无需摘要
+
+        old_entries = self.short_term[:-keep_recent]
+        recent_entries = self.short_term[-keep_recent:]
+
+        # 将旧条目格式化为文本
+        lines = []
+        for entry in old_entries:
+            lines.append(f"[{entry.type.value}] {entry.content}")
+        old_text = "\n".join(lines)
+
+        # 调用摘要函数
+        try:
+            summary = summarizer_fn(old_text)
+        except Exception:
+            return  # 摘要失败时保持原样
+
+        # 替换短期记忆：一条摘要 + 最近 N 条
+        summary_entry = MemoryEntry(
+            type=MemoryType.SYSTEM_MESSAGE,
+            content=f"[历史摘要]\n{summary}",
+        )
+        self.short_term = [summary_entry] + recent_entries

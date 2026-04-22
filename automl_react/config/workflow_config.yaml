@@ -70,3 +70,9 @@ logging:
   level: "INFO"
   save_llm_calls: true
   save_workflow_transitions: true
+
+# 沙盒执行配置
+execution:
+  sandbox_mode: "subprocess"
+  memory_limit_mb: 2048
+  cpu_time_limit: 300

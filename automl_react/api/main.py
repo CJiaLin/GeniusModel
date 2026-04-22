@@ -426,79 +426,32 @@ class LLMClientError(Exception):
 def create_llm_client(model: str = None):
     """
     创建 LLM 客户端
-    
-    根据配置创建真实的 LLM 客户端，如果失败则抛出明确的错误
+
+    根据配置通过 LLMProviderFactory 创建对应提供商的 LLM 客户端
     """
-    errors = []
-    
-    # 首先尝试从配置加载
+    from automl_react.llm import LLMProviderFactory
+
     try:
         config_loader = get_config_loader()
         llm_config = config_loader.get_llm_config(model)
-        
-        provider = llm_config.get("provider", "openai")
-        model_name = llm_config.get("model_name", model or "gpt-4")
-        
-        if provider == "anthropic":
-            try:
-                from langchain_anthropic import ChatAnthropic
-                api_key = llm_config.get("api_key")
-                if not api_key:
-                    raise LLMClientError(
-                        f"Anthropic API 密钥未配置。\n"
-                        f"请设置环境变量 ANTHROPIC_API_KEY 或在配置文件中指定 api_key。\n"
-                        f"当前模型: {model_name}"
-                    )
-                return ChatAnthropic(
-                    model=model_name,
-                    temperature=llm_config.get("temperature", 0.1),
-                    max_tokens=llm_config.get("max_tokens", 4096),
-                    api_key=api_key
-                )
-            except ImportError as e:
-                errors.append(f"langchain_anthropic 未安装: {e}")
-        
-        elif provider == "openai":
-            try:
-                from langchain_openai import ChatOpenAI
-                api_key = llm_config.get("api_key")
-                if not api_key:
-                    raise LLMClientError(
-                        f"OpenAI API 密钥未配置。\n"
-                        f"请设置环境变量 OPENAI_API_KEY 或在配置文件中指定 api_key。\n"
-                        f"当前模型: {model_name}"
-                    )
-                return ChatOpenAI(
-                    model=model_name,
-                    temperature=llm_config.get("temperature", 0.1),
-                    max_tokens=llm_config.get("max_tokens", 4096),
-                    api_key=api_key,
-                    base_url=llm_config.get("base_url")
-                )
-            except ImportError as e:
-                errors.append(f"langchain_openai 未安装: {e}")
-        
+        return LLMProviderFactory.create(llm_config)
     except LLMClientError:
         raise
     except Exception as e:
-        errors.append(f"从配置创建 LLM 客户端失败: {e}")
-    
-    # 如果都失败了，抛出详细的错误信息
-    error_msg = "无法创建 LLM 客户端。\n\n"
-    error_msg += "可能的原因:\n"
-    error_msg += "1. 缺少必要的 Python 包:\n"
-    error_msg += "   - pip install langchain-openai  # 使用 OpenAI\n"
-    error_msg += "   - pip install langchain-anthropic  # 使用 Claude\n"
-    error_msg += "2. API 密钥未配置:\n"
-    error_msg += "   - 设置环境变量 OPENAI_API_KEY 或 ANTHROPIC_API_KEY\n"
-    error_msg += "   - 或在 llm_config.yaml 中配置 api_key\n"
-    error_msg += "3. 配置文件错误:\n"
-    error_msg += "   - 检查 automl_react/config/llm_config.yaml 配置\n\n"
-    error_msg += "详细错误:\n"
-    for err in errors:
-        error_msg += f"  - {err}\n"
-    
-    raise LLMClientError(error_msg)
+        error_msg = (
+            "无法创建 LLM 客户端。\n\n"
+            "可能的原因:\n"
+            "1. 缺少必要的 Python 包:\n"
+            "   - pip install langchain-openai  # 使用 OpenAI\n"
+            "   - pip install langchain-anthropic  # 使用 Claude\n"
+            "2. API 密钥未配置:\n"
+            "   - 设置环境变量 OPENAI_API_KEY 或 ANTHROPIC_API_KEY\n"
+            "   - 或在 llm_config.yaml 中配置 api_key\n"
+            "3. 配置文件错误:\n"
+            "   - 检查 automl_react/config/llm_config.yaml 配置\n\n"
+            f"详细错误:\n  - {e}\n"
+        )
+        raise LLMClientError(error_msg)
 
 
 # API 路由
@@ -1494,6 +1447,7 @@ def _rerun_script_on_split(
     script_path: str,
     input_path: str,
     output_path: str,
+    train_path: str = None,
     timeout: int = 300,
 ) -> Dict:
     """直接 subprocess 执行已保存的 .py 脚本（不走 LLM），用于在 valid/test 上重跑清洗/特征工程代码。"""
@@ -1504,9 +1458,13 @@ def _rerun_script_on_split(
     if not os.path.exists(input_path):
         return {"success": False, "error": f"输入文件不存在: {input_path}"}
 
+    cmd = [sys.executable, script_path, input_path, output_path]
+    if train_path:
+        cmd.append(train_path)
+
     try:
         result = sp.run(
-            [sys.executable, script_path, input_path, output_path],
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1575,11 +1533,12 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
         script_path = str(asset_manager.session_dir / "code" / "cleaning.py")
         valid_raw = workflow_state.get_context("valid_raw_path")
         test_raw = workflow_state.get_context("test_raw_path")
+        train_raw = workflow_state.get_context("train_raw_path") or data_path
         data_dir = str(asset_manager.session_dir / "data")
 
         if valid_raw and os.path.exists(valid_raw):
             cleaned_valid_path = os.path.join(data_dir, "cleaned_valid.csv")
-            r = _rerun_script_on_split(script_path, valid_raw, cleaned_valid_path)
+            r = _rerun_script_on_split(script_path, valid_raw, cleaned_valid_path, train_path=train_raw)
             if r["success"]:
                 print(f"[API] valid 清洗完成: {cleaned_valid_path}")
                 workflow_state.set_context("cleaned_valid_path", cleaned_valid_path)
@@ -1589,7 +1548,7 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
 
         if test_raw and os.path.exists(test_raw):
             cleaned_test_path = os.path.join(data_dir, "cleaned_test.csv")
-            r = _rerun_script_on_split(script_path, test_raw, cleaned_test_path)
+            r = _rerun_script_on_split(script_path, test_raw, cleaned_test_path, train_path=train_raw)
             if r["success"]:
                 print(f"[API] test 清洗完成: {cleaned_test_path}")
                 workflow_state.set_context("cleaned_test_path", cleaned_test_path)
@@ -1881,11 +1840,12 @@ async def execute_feature_engineering(
         script_path = str(asset_manager.session_dir / "code" / "feature_engineering.py")
         cleaned_valid = workflow_state.get_context("cleaned_valid_path")
         cleaned_test = workflow_state.get_context("cleaned_test_path")
+        cleaned_train = workflow_state.get_context("cleaned_train_path")
         data_dir = str(asset_manager.session_dir / "data")
 
         if cleaned_valid and os.path.exists(cleaned_valid):
             features_valid_path = os.path.join(data_dir, "features_valid.csv")
-            r = _rerun_script_on_split(script_path, cleaned_valid, features_valid_path)
+            r = _rerun_script_on_split(script_path, cleaned_valid, features_valid_path, train_path=cleaned_train)
             if r["success"]:
                 print(f"[API] valid 特征工程完成: {features_valid_path}")
                 workflow_state.set_context("features_valid_path", features_valid_path)
@@ -1895,7 +1855,7 @@ async def execute_feature_engineering(
 
         if cleaned_test and os.path.exists(cleaned_test):
             features_test_path = os.path.join(data_dir, "features_test.csv")
-            r = _rerun_script_on_split(script_path, cleaned_test, features_test_path)
+            r = _rerun_script_on_split(script_path, cleaned_test, features_test_path, train_path=cleaned_train)
             if r["success"]:
                 print(f"[API] test 特征工程完成: {features_test_path}")
                 workflow_state.set_context("features_test_path", features_test_path)
@@ -2317,6 +2277,82 @@ async def generate_pipeline(session_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/predict")
+async def predict(session_id: str, data_path: str, output_dir: str = None):
+    """使用已训练模型对新数据进行预测"""
+    import subprocess as sp
+
+    session = get_session(session_id)
+    workflow_state = session.get("workflow_state")
+    if not workflow_state:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    asset_manager = get_asset_manager(session_id=session_id)
+
+    # 检查必需文件
+    pipeline_path = str(asset_manager.session_dir / "code" / "pipeline.py")
+    model_path = str(asset_manager.session_dir / "models" / "trained_model.pkl")
+    if not os.path.exists(pipeline_path):
+        raise HTTPException(status_code=400, detail="pipeline.py 不存在，请先调用 /pipeline/generate")
+    if not os.path.exists(model_path):
+        raise HTTPException(status_code=400, detail="trained_model.pkl 不存在，请先完成模型训练")
+    if not os.path.exists(data_path):
+        raise HTTPException(status_code=400, detail=f"输入数据不存在: {data_path}")
+
+    # 获取上下文参数
+    target_column = _get_effective_target_column(workflow_state)
+    train_raw_path = workflow_state.get_context("train_raw_path") or workflow_state.get_context("data_path")
+
+    # 输出目录
+    if not output_dir:
+        output_dir = str(asset_manager.session_dir / "predictions")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 构建命令
+    cmd = [
+        sys.executable, pipeline_path,
+        "--mode", "predict",
+        "--data", os.path.abspath(data_path),
+        "--model", model_path,
+        "--output-dir", output_dir,
+        "--target", target_column,
+    ]
+    if train_raw_path and os.path.exists(train_raw_path):
+        cmd.extend(["--train-data", train_raw_path])
+
+    try:
+        result = sp.run(
+            cmd, capture_output=True, text=True,
+            timeout=600, cwd=os.path.dirname(pipeline_path),
+        )
+    except sp.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="预测超时 (600s)")
+
+    predictions_path = os.path.join(output_dir, "predictions.csv")
+    success = result.returncode == 0 and os.path.exists(predictions_path)
+
+    response = {
+        "success": success,
+        "predictions_path": predictions_path if success else None,
+        "stdout": result.stdout,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    if not success:
+        response["error"] = result.stderr.strip() if result.stderr else "预测失败"
+        raise HTTPException(status_code=500, detail=response)
+
+    # 统计预测记录数
+    try:
+        import pandas as pd
+        pred_df = pd.read_csv(predictions_path)
+        response["records"] = len(pred_df)
+    except Exception:
+        pass
+
+    return response
 
 
 # ==================== Session CRUD ====================

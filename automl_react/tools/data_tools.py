@@ -5,31 +5,31 @@
 """
 
 import pandas as pd
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Literal
 from pathlib import Path
 
+from pydantic import BaseModel, Field
+
 from .base_tool import BaseTool, ToolResult
+
+
+class DataLoaderInput(BaseModel):
+    file_path: str = Field(..., description="数据文件路径")
+    file_type: Optional[Literal["csv", "excel", "json"]] = Field(
+        None, description="文件类型 (csv/excel/json)，可选，自动检测"
+    )
 
 
 class DataLoaderTool(BaseTool):
     """
     数据加载工具
-    
+
     支持加载 CSV、Excel、JSON 等格式的数据文件
     """
-    
+
     name = "load_data"
     description = "加载数据文件，支持 CSV、Excel、JSON 格式"
-    parameters = {
-        "file_path": {
-            "type": "string",
-            "description": "数据文件路径"
-        },
-        "file_type": {
-            "type": "string",
-            "description": "文件类型 (csv/excel/json)，可选，自动检测"
-        }
-    }
+    input_model = DataLoaderInput
     
     def execute(self, file_path: str, file_type: str = None) -> ToolResult:
         """执行数据加载"""
@@ -79,21 +79,20 @@ class DataLoaderTool(BaseTool):
             return ToolResult.error(f"加载数据失败: {str(e)}")
 
 
+class DataAnalyzerInput(BaseModel):
+    file_path: str = Field(..., description="数据文件路径")
+
+
 class DataAnalyzerTool(BaseTool):
     """
     数据分析工具
-    
+
     分析数据的基本统计信息和质量
     """
-    
+
     name = "analyze_data"
     description = "分析数据的基本统计信息和质量"
-    parameters = {
-        "file_path": {
-            "type": "string",
-            "description": "数据文件路径"
-        }
-    }
+    input_model = DataAnalyzerInput
     
     def execute(self, file_path: str) -> ToolResult:
         """执行数据分析"""

@@ -6,34 +6,31 @@
 
 import pandas as pd
 import numpy as np
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Literal
+
+from pydantic import BaseModel, Field
 
 from .base_tool import BaseTool, ToolResult
+
+
+class FeatureGeneratorInput(BaseModel):
+    file_path: str = Field(..., description="数据文件路径")
+    target_column: str = Field(..., description="目标列名")
+    task_type: Literal["classification", "regression"] = Field(
+        ..., description="任务类型 (classification/regression)"
+    )
 
 
 class FeatureGeneratorTool(BaseTool):
     """
     特征生成工具
-    
+
     自动生成数据特征
     """
-    
+
     name = "generate_features"
     description = "自动生成数据特征，包括交互特征、统计特征等"
-    parameters = {
-        "file_path": {
-            "type": "string",
-            "description": "数据文件路径"
-        },
-        "target_column": {
-            "type": "string",
-            "description": "目标列名"
-        },
-        "task_type": {
-            "type": "string",
-            "description": "任务类型 (classification/regression)"
-        }
-    }
+    input_model = FeatureGeneratorInput
     
     def execute(self, file_path: str, target_column: str, task_type: str) -> ToolResult:
         """执行特征生成"""

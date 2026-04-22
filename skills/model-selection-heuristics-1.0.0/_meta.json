@@ -1,0 +1,7 @@
+{
+  "name": "model-selection-heuristics",
+  "version": "1.0.0",
+  "description": "ML 模型选择启发式规则与最佳实践",
+  "tags": ["model-selection", "ml-patterns", "ml-engineering"],
+  "language": "zh-CN"
+}

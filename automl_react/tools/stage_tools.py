@@ -5,7 +5,9 @@
 """
 
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Literal
+
+from pydantic import BaseModel, Field
 
 from .base_tool import BaseTool, ToolResult
 
@@ -23,6 +25,15 @@ STAGE_ASSET_MAP = {
 }
 
 
+class StageResultInput(BaseModel):
+    stage: str = Field(
+        ..., description="阶段名称: cleaning / exploration / features / models / analysis / reports / data / code"
+    )
+    filename: str = Field(
+        "", description="可选的文件名（如 'cleaning_result.json', 'feature_metrics_report.md'）。不指定则列出可用文件"
+    )
+
+
 class StageResultTool(BaseTool):
     """查询前序工作流阶段结果的工具"""
 
@@ -32,16 +43,7 @@ class StageResultTool(BaseTool):
         "数据探索(exploration)、特征工程(features)、模型训练(models)、"
         "分析(analysis)等阶段的结果文件。不指定文件名时列出该阶段所有可用文件。"
     )
-    parameters = {
-        "stage": {
-            "type": "string",
-            "description": "阶段名称: cleaning / exploration / features / models / analysis / reports / data / code"
-        },
-        "filename": {
-            "type": "string",
-            "description": "可选的文件名（如 'cleaning_result.json', 'feature_metrics_report.md'）。不指定则列出可用文件"
-        }
-    }
+    input_model = StageResultInput
 
     def __init__(self, session_id: str = "default"):
         self._session_id = session_id

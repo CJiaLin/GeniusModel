@@ -34,15 +34,20 @@ class SubprocessCodeExecutor:
 
     通过 pickle 临时文件传递上下文变量和收集输出变量，
     使用 subprocess.run 的 timeout 参数强制超时。
+    支持可选的内存和 CPU 时间限制（通过 resource 模块）。
     """
 
     def __init__(
         self,
         timeout: int = 300,
         python_path: Optional[str] = None,
+        memory_limit_mb: int = 2048,
+        cpu_time_limit: Optional[int] = None,
     ):
         self.timeout = timeout
         self.python_path = python_path or sys.executable
+        self.memory_limit_mb = memory_limit_mb
+        self.cpu_time_limit = cpu_time_limit or timeout
 
     def execute(
         self,
@@ -166,6 +171,24 @@ import sys
 import os
 import traceback
 
+# ====== 资源限制 ======
+try:
+    import resource
+    # 内存限制 (bytes)
+    _mem_limit = {self.memory_limit_mb} * 1024 * 1024
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (_mem_limit, _mem_limit))
+    except (ValueError, resource.error):
+        pass  # 某些平台不支持 RLIMIT_AS
+    # CPU 时间限制 (seconds)
+    _cpu_limit = {self.cpu_time_limit}
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, (_cpu_limit, _cpu_limit + 10))
+    except (ValueError, resource.error):
+        pass
+except ImportError:
+    pass  # Windows 不支持 resource 模块
+
 # ====== 加载上下文 ======
 try:
     with open({ctx_path!r}, "rb") as _ctx_f:
@@ -209,8 +232,13 @@ except Exception as _e:
 '''
 
     def _build_env(self) -> Dict[str, str]:
-        """构建子进程环境变量，继承当前环境。"""
+        """构建子进程环境变量，继承当前环境但过滤敏感变量。"""
         env = os.environ.copy()
+        # 过滤敏感变量，防止 LLM 生成的代码泄露密钥
+        sensitive_prefixes = ("OPENAI_", "ANTHROPIC_", "AWS_SECRET", "DASHSCOPE_")
+        for key in list(env.keys()):
+            if any(key.startswith(prefix) for prefix in sensitive_prefixes):
+                del env[key]
         return env
 
 
