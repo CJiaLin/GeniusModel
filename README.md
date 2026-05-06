@@ -2,7 +2,7 @@
 
 ## 项目简介
 
-基于 **ReAct (Reasoning + Acting)** Agent 架构开发的交互式 AutoML 系统，提供从数据接入到模型训练与报告输出的完整自动化建模流程。系统在每个关键阶段支持用户确认和干预，确保建模过程符合业务需求。
+基于 **ReAct (Reasoning + Acting)** Agent 架构开发的交互式 AutoML 系统，提供从数据接入到模型训练与报告输出的完整自动化建模流程。系统在每个关键阶段支持用户确认和干预，确保建模过程符合业务需求。支持多种 LLM 提供商（OpenAI、Anthropic Claude、Moonshot Kimi、通义千问等），通过 SSE 流式输出实时展示 Agent 推理过程。
 
 **核心设计理念**：
 
@@ -10,6 +10,7 @@
 - **可审计与可复现**：完整的 LLM 调用日志、代码版本控制和资产保存
 - **配置驱动**：通过 YAML 文件管理所有 Prompt 和模型配置，零代码修改即可调整行为
 - **数据事实优先**：所有方案必须基于实际数据，禁止臆造字段或统计值
+- **流式交互**：通过 Stream Callback 机制实现 Agent 内部推理到前端的实时流式输出
 
 ## 系统架构
 
@@ -48,6 +49,7 @@
 | **LLMLogger** | `logger/llm_logger.py` | 记录 LLM 调用（输入/输出/Token/延迟）为 JSONL |
 | **ConfirmationPoint** | `confirmation/confirmation_point.py` | 用户确认机制（确认/修改/跳过/拒绝） |
 | **SubprocessExecutor** | `utils/subprocess_executor.py` | 隔离子进程执行 LLM 生成的代码，超时控制与崩溃隔离 |
+| **StreamCallback** | `core/stream_callback.py` | 流式输出回调机制（Agent → SSE） |
 | **CodeActAgent** | `utils/codeact_agent.py` | CodeAct 模式：迭代式代码生成与执行 |
 | **CodeGenerator** | `utils/code_generator.py` | 代码生成与执行验证 |
 | **Sandbox** | `utils/sandbox.py` | 沙箱执行环境封装 |
@@ -180,7 +182,7 @@ assets/{session_id}/
 ## 项目结构
 
 ```
-AutoMLByLLMHarness/
+AutoMLByLLM/
 ├── automl_react/                    # 核心代码库
 │   ├── agents/                      # 各阶段 Agent 实现
 │   │   ├── data_analysis_agent.py   #   问题定义
@@ -192,7 +194,7 @@ AutoMLByLLMHarness/
 │   │   ├── model_training_agent.py  #   模型训练
 │   │   └── model_evaluation_agent.py#   模型评估
 │   ├── api/
-│   │   └── main.py                  # FastAPI 主入口（20+ 个端点）
+│   │   └── main.py                  # FastAPI 主入口（25+ 个端点）
 │   ├── assets/
 │   │   └── asset_manager.py         # 会话资产管理
 │   ├── config/
@@ -207,6 +209,7 @@ AutoMLByLLMHarness/
 │   │   ├── memory.py                # 对话记忆管理
 │   │   ├── observation.py           # 观察结果表示
 │   │   ├── middleware.py            # 中间件基类与迭代上下文
+│   │   ├── stream_callback.py       # 流式输出回调机制
 │   │   └── middlewares/             # 中间件实现
 │   │       ├── summarization_middleware.py  # 记忆上下文优化
 │   │       ├── logging_middleware.py        # LLM 调用日志
@@ -272,6 +275,7 @@ AutoMLByLLMHarness/
 | 领域 | 技术 |
 |------|------|
 | **Agent 架构** | ReAct (Reasoning + Acting) + CodeAct（迭代代码生成执行） |
+| **流式回调** | StreamCallback 机制（Agent 内部 → SSE 端点） |
 | **中间件系统** | 自定义中间件链（摘要、日志、错误处理、Token 监控、超时） |
 | **LLM 提供者** | 工厂模式：OpenAI / OpenAI 兼容（Kimi、DeepSeek、通义千问）/ Anthropic Claude |
 | **Web 框架** | FastAPI + Uvicorn |
@@ -302,9 +306,17 @@ pip install -r requirements.txt
 编辑 `automl_react/config/llm_config.yaml`：
 
 ```yaml
-default_model: "kimi-k2.5"
+default_model: "claude-opus-4-6"
 
 models:
+  claude-opus-4-6:
+    provider: "openai"
+    model_name: "claude-opus-4-6"
+    temperature: 1.0
+    max_tokens: 65536
+    api_key: "${YOUR_API_KEY}"
+    base_url: "https://your-api-endpoint/v1"
+
   kimi-k2.5:
     provider: "openai"
     model_name: "kimi-k2.5"
@@ -313,22 +325,36 @@ models:
     api_key: "${MOONSHOT_API_KEY}"
     base_url: "https://api.moonshot.cn/v1"
 
+  qwen3.6-plus:
+    provider: "openai"
+    model_name: "qwen3.6-plus"
+    temperature: 1.0
+    max_tokens: 65536
+    api_key: "${DASHSCOPE_API_KEY}"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
 stage_models:                        # 可为不同阶段指定不同模型
-  data_analysis: "kimi-k2.5"
-  data_cleaning: "kimi-k2.5"
-  feature_engineering: "kimi-k2.5"
-  model_training: "kimi-k2.5"
+  data_analysis: "claude-opus-4-6"
+  data_cleaning: "claude-opus-4-6"
+  feature_engineering: "claude-opus-4-6"
+  model_training: "claude-opus-4-6"
+  report_generation: "claude-opus-4-6"
+  code_generation: "claude-opus-4-6"
+
+stage_max_tokens:                    # 各阶段 max_tokens 覆盖
+  data_cleaning: 8192
+  data_cleaning_plan: 4096
+  code_generation: 8192
 ```
 
-设置对应的环境变量：
+设置对应的环境变量（根据使用的模型配置）：
 
 ```bash
-export MOONSHOT_API_KEY="your-api-key"
-# 或
-export OPENAI_API_KEY="your-api-key"
-export DEEPSEEK_API_KEY="your-api-key"
-export DASHSCOPE_API_KEY="your-api-key"
-export ANTHROPIC_API_KEY="your-api-key"
+export MOONSHOT_API_KEY="your-api-key"    # Moonshot Kimi
+export DASHSCOPE_API_KEY="your-api-key"   # 通义千问
+export OPENAI_API_KEY="your-api-key"      # OpenAI
+export DEEPSEEK_API_KEY="your-api-key"    # DeepSeek
+export ANTHROPIC_API_KEY="your-api-key"   # Anthropic Claude
 ```
 
 ### 3. 启动服务
@@ -359,14 +385,18 @@ open frontend/index.html
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/` | GET | API 信息 |
+| **数据上传** | | |
+| `/upload` | POST | 上传数据文件（multipart/form-data） |
 | **工作流控制** | | |
-| `/workflow/start` | POST | 启动新工作流（session_id, data_path, target_column, task_type） |
+| `/workflow/start` | POST | 启动新工作流（session_id, data_path, target_column, task_type, model, task_description） |
 | `/workflow/{session_id}/status` | GET | 获取工作流状态 |
 | `/workflow/{session_id}/stage/{stage}/run` | POST | 执行指定阶段 |
+| `/workflow/{session_id}/stage/{stage}/stream` | GET | 流式执行阶段（SSE） |
 | **确认管理** | | |
 | `/confirmation/submit` | POST | 提交确认决策 |
 | `/confirmation/revise` | POST | 修订方案（多轮修订） |
 | `/confirmation/{session_id}/pending` | GET | 获取当前待确认项 |
+| `/confirmation/{session_id}/submit/stream` | GET | 流式提交确认（SSE） |
 | **对话接口** | | |
 | `/chat` | POST | 同步对话 |
 | `/chat/stream` | GET | 流式对话（SSE） |
@@ -376,6 +406,7 @@ open frontend/index.html
 | **会话管理** | | |
 | `/sessions` | GET | 列出所有会话 |
 | `/sessions/{session_id}/status` | GET | 获取会话状态 |
+| `/sessions/{session_id}/restore` | GET | 恢复会话完整状态（断点续跑） |
 | `/sessions/{session_id}` | DELETE | 删除会话 |
 | **Skills** | | |
 | `/skills/list` | GET | 列出可用技能包 |
@@ -420,9 +451,17 @@ open frontend/index.html
 #### 2. LLM 配置 (`automl_react/config/llm_config.yaml`)
 
 ```yaml
-default_model: "kimi-k2.5"
+default_model: "claude-opus-4-6"
 
 models:
+  claude-opus-4-6:
+    provider: "openai"
+    model_name: "claude-opus-4-6"
+    temperature: 1.0
+    max_tokens: 65536
+    api_key: "${YOUR_API_KEY}"
+    base_url: "https://your-api-endpoint/v1"
+
   kimi-k2.5:
     provider: "openai"
     model_name: "kimi-k2.5"
@@ -431,9 +470,23 @@ models:
     api_key: "${MOONSHOT_API_KEY}"       # 支持环境变量引用
     base_url: "https://api.moonshot.cn/v1"
 
+  qwen3.6-plus:
+    provider: "openai"
+    model_name: "qwen3.6-plus"
+    temperature: 1.0
+    max_tokens: 65536
+    api_key: "${DASHSCOPE_API_KEY}"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
 stage_models:                            # 阶段级模型覆盖
-  data_analysis: "kimi-k2.5"
-  model_training: "kimi-k2.5"
+  data_analysis: "claude-opus-4-6"
+  data_cleaning: "claude-opus-4-6"
+  model_training: "claude-opus-4-6"
+
+stage_max_tokens:                        # 阶段级 token 限制
+  data_cleaning: 8192
+  data_cleaning_plan: 4096
+  code_generation: 8192
 
 logging:
   enabled: true
@@ -447,6 +500,11 @@ streaming:
 retry:
   max_retries: 3
   backoff: "exponential"
+
+rate_limit:
+  enabled: false
+  requests_per_minute: 60
+  tokens_per_minute: 100000
 ```
 
 #### 3. 工作流配置 (`automl_react/config/workflow_config.yaml`)
@@ -454,7 +512,7 @@ retry:
 ```yaml
 react_agent:
   max_iterations: 10                     # ReAct 最大迭代次数
-  timeout: 300                           # 超时秒数
+  timeout: 600                           # 超时秒数
 
 stages:
   data_cleaning:
@@ -470,6 +528,11 @@ confirmation:
 assets:
   save_code: true
   save_models: true
+
+execution:
+  sandbox_mode: "subprocess"             # 沙盒执行模式
+  memory_limit_mb: 2048                  # 内存限制
+  cpu_time_limit: 300                    # CPU 时间限制（秒）
 ```
 
 ## LLM 调用日志
@@ -500,6 +563,10 @@ assets:
 - **方案展示**：Markdown 渲染 + Python 代码高亮
 - **用户确认面板**：Confirm / Modify / Skip / Reject 按钮
 - **流式输出**：SSE 实时显示 LLM 生成的长内容
+- **文件上传**：拖拽或点击上传 CSV/Excel 数据文件
+- **会话恢复**：支持断点续跑，自动恢复各阶段已完成结果
+- **模型选择**：可选配不同 LLM 模型执行工作流
+- **任务描述**：支持用户输入建模背景和业务需求说明
 - **资产管理**：下载数据、模型、报告等生成文件
 - **聊天界面**：与 Agent 实时对话交互
 - **Skills 参考**：展示当前阶段引用的专业知识
@@ -526,7 +593,7 @@ assets:
 | **数据事实优先** | 所有方案基于实际数据统计，禁止臆造字段或示例数据 |
 | **人在回路** | 关键阶段支持确认/修改/跳过，尊重用户业务知识 |
 | **可审计与可复现** | JSONL 日志 + 资产保存 + 状态持久化，支持断点恢复 |
-| **配置驱动** | YAML 管理 Prompt 和模型，支持阶段级模型覆盖 |
+| **配置驱动** | YAML 管理 Prompt 和模型，支持阶段级模型覆盖与 Token 限制 |
 | **工程最佳实践** | 严格区分数据集，防止泄漏，代码隔离执行 |
 | **崩溃隔离** | LLM 生成的代码在子进程/沙箱执行，主进程不受影响 |
 | **中间件扩展** | 通过中间件链灵活插入横切关注点（日志、监控、限流等） |

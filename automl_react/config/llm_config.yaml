@@ -2,7 +2,7 @@
 # 大模型配置，支持多种 LLM 提供商
 
 # 默认使用的模型
-default_model: "kimi-k2.5" # "qwen3.6-plus"
+default_model: "claude-opus-4-6" # "qwen3.6-plus"
 
 # 模型配置
 models:
@@ -14,26 +14,41 @@ models:
     temperature: 1.0
     max_tokens: 65536
     timeout: 120
-    api_key: "${MOONSHOT_API_KEY}"
+    api_key: "sk-fzRoH8YfHjSDBcaGooMErOVBKsl9frstezHVRGIP3UBgFOUa" # "${MOONSHOT_API_KEY}"
     base_url: "https://api.moonshot.cn/v1"
 
-  # qwen3.6-plus:
-  #   provider: "openai"
-  #   model_name: "qwen3.6-plus"
-  #   temperature: 1.0
-  #   max_tokens: 65536
-  #   timeout: 120
-  #   api_key: "sk-2ff94cd887604e60baeb2ef66f58fad0" # "${MOONSHOT_API_KEY}"
-  #   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  claude-opus-4-6:
+    provider: "openai"
+    model_name: "claude-opus-4-6"
+    temperature: 1.0
+    max_tokens: 65536
+    timeout: 600000
+    api_key: "sk-UbK2DTVQKLO0G5_j9vT2vLxAT6NUWx3mrY4JWfh3C0M" # "${MOONSHOT_API_KEY}"
+    base_url: "https://api.cloubic.com/v1"
+
+  qwen3.6-plus:
+    provider: "openai"
+    model_name: "qwen3.6-plus"
+    temperature: 1.0
+    max_tokens: 65536
+    timeout: 120
+    api_key: "sk-2ff94cd887604e60baeb2ef66f58fad0" # "${MOONSHOT_API_KEY}"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # 各阶段使用的模型（可以覆盖默认模型）
 stage_models:
-  data_analysis: "kimi-k2.5"        # 数据分析阶段
-  data_cleaning: "kimi-k2.5"       # 数据清洗阶段
-  feature_engineering: "kimi-k2.5"  # 特征工程阶段
-  model_training: "kimi-k2.5"       # 模型训练阶段
-  report_generation: "kimi-k2.5"    # 报告生成阶段
-  code_generation: "kimi-k2.5"      # 代码生成阶段
+  data_analysis: "claude-opus-4-6"        # 数据分析阶段
+  data_cleaning: "claude-opus-4-6"       # 数据清洗阶段
+  feature_engineering: "claude-opus-4-6"  # 特征工程阶段
+  model_training: "claude-opus-4-6"       # 模型训练阶段
+  report_generation: "claude-opus-4-6"    # 报告生成阶段
+  code_generation: "claude-opus-4-6"      # 代码生成阶段
+
+# 各阶段 max_tokens 覆盖（精简输出，减少生成时间）
+stage_max_tokens:
+  data_cleaning: 8192
+  data_cleaning_plan: 4096
+  code_generation: 8192
 
 # 日志配置
 logging:

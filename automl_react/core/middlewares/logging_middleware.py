@@ -45,10 +45,10 @@ class LoggingMiddleware(Middleware):
             provider=provider,
             input_content=input_text,
             output_content=ctx.llm_response or "",
+            latency_ms=elapsed_ms,
             stage=ctx.stage,
             metadata={
                 "iteration": ctx.iteration,
-                "latency_ms": elapsed_ms,
                 "prompt_scope": "final_actual_llm_input",
                 "prompt_format": "chat_messages_system_user",
                 **(ctx.metadata.get("llm_extra", {})),

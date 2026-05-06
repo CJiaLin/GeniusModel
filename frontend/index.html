@@ -4,932 +4,1586 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AutoML 交互式建模平台</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5568d3;
+            --secondary: #764ba2;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --info: #3b82f6;
+            --bg: #f0f2f5;
+            --card: #ffffff;
+            --text: #1f2937;
+            --text-secondary: #6b7280;
+            --border: #e5e7eb;
+            --sidebar-w: 280px;
+            --header-h: 56px;
         }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; font-size: 14px; }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #f5f5f5;
-            color: #333;
-            line-height: 1.6;
-        }
+        /* Layout */
+        .app-header { height: var(--header-h); background: linear-gradient(135deg, var(--primary), var(--secondary)); color: #fff; display: flex; align-items: center; padding: 0 24px; position: fixed; top: 0; left: 0; right: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+        .app-header .logo { font-size: 18px; font-weight: 700; margin-right: 32px; white-space: nowrap; }
+        .app-header .logo i { margin-right: 8px; }
+        .nav-tabs { display: flex; gap: 4px; }
+        .nav-tab { padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; color: rgba(255,255,255,.75); transition: all .2s; border: none; background: none; }
+        .nav-tab:hover { background: rgba(255,255,255,.15); color: #fff; }
+        .nav-tab.active { background: rgba(255,255,255,.2); color: #fff; font-weight: 600; }
+        .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
+        .app-body { display: flex; margin-top: var(--header-h); min-height: calc(100vh - var(--header-h)); }
 
-        header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px 0;
-            text-align: center;
-            margin-bottom: 30px;
-            border-radius: 10px;
-        }
+        /* Sidebar */
+        .sidebar { width: var(--sidebar-w); background: var(--card); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; position: fixed; top: var(--header-h); bottom: 0; left: 0; z-index: 50; }
+        .sidebar h3 { font-size: 13px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 12px; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--text-secondary); }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; transition: border-color .2s; background: #fff; }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(102,126,234,.1); }
+        .form-group textarea { resize: vertical; min-height: 60px; }
 
-        header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
+        /* Buttons */
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .2s; }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-primary:hover { background: var(--primary-dark); }
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-success:hover { opacity: .9; }
+        .btn-warning { background: var(--warning); color: #fff; }
+        .btn-warning:hover { opacity: .9; }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-danger:hover { opacity: .9; }
+        .btn-secondary { background: #6b7280; color: #fff; }
+        .btn-secondary:hover { background: #4b5563; }
+        .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+        .btn-outline:hover { background: var(--bg); }
+        .btn-block { width: 100%; }
+        .btn-sm { padding: 5px 10px; font-size: 12px; }
+        .btn:disabled { opacity: .5; cursor: not-allowed; }
 
-        header p {
-            opacity: 0.9;
-            font-size: 1.1em;
-        }
+        /* Workflow Steps */
+        .steps-container { margin-top: 16px; }
+        .step-item { display: flex; align-items: flex-start; padding: 8px 10px; border-radius: 6px; cursor: pointer; transition: background .15s; margin-bottom: 2px; }
+        .step-item:hover { background: var(--bg); }
+        .step-item.active { background: rgba(102,126,234,.08); }
+        .step-dot { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; margin-right: 10px; margin-top: 1px; border: 2px solid var(--border); color: var(--text-secondary); background: #fff; }
+        .step-item.active .step-dot { border-color: var(--primary); color: var(--primary); background: rgba(102,126,234,.08); }
+        .step-item.completed .step-dot { border-color: var(--success); background: var(--success); color: #fff; }
+        .step-item.error .step-dot { border-color: var(--danger); background: var(--danger); color: #fff; }
+        .step-info { flex: 1; min-width: 0; }
+        .step-title { font-size: 13px; font-weight: 500; }
+        .step-desc { font-size: 11px; color: var(--text-secondary); }
 
-        .main-layout {
-            display: grid;
-            grid-template-columns: 300px 1fr;
-            gap: 20px;
-        }
+        /* Main content */
+        .main-content { flex: 1; margin-left: var(--sidebar-w); padding: 20px 24px; }
 
-        .sidebar {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            height: fit-content;
-        }
+        /* Card */
+        .card { background: var(--card); border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.06); padding: 24px; margin-bottom: 20px; }
+        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .card-title { font-size: 16px; font-weight: 600; }
 
-        .sidebar h3 {
-            margin-bottom: 15px;
-            color: #667eea;
-            border-bottom: 2px solid #667eea;
-            padding-bottom: 10px;
-        }
+        /* Markdown content */
+        .md-content { background: #f8fafc; padding: 20px; border-radius: 8px; line-height: 1.7; font-size: 14px; }
+        .md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin: 16px 0 8px; }
+        .md-content h1 { font-size: 20px; }
+        .md-content h2 { font-size: 17px; }
+        .md-content h3 { font-size: 15px; }
+        .md-content ul, .md-content ol { padding-left: 20px; margin: 8px 0; }
+        .md-content pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 6px; overflow-x: auto; margin: 12px 0; }
+        .md-content code { font-family: "SF Mono", "Fira Code", monospace; font-size: 13px; }
+        .md-content p code { background: #e2e8f0; padding: 2px 6px; border-radius: 3px; color: #be185d; }
+        .md-content table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+        .md-content th, .md-content td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+        .md-content th { background: var(--bg); font-weight: 600; }
+        .md-content blockquote { border-left: 3px solid var(--primary); padding-left: 12px; color: var(--text-secondary); margin: 12px 0; }
 
-        .form-group {
-            margin-bottom: 15px;
-        }
+        /* Confirmation bar */
+        .confirm-bar { display: flex; align-items: center; gap: 10px; padding: 16px 20px; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; margin-top: 16px; }
+        .confirm-bar .label { font-weight: 600; color: #92400e; margin-right: 8px; white-space: nowrap; }
 
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: 500;
-        }
+        /* Revision panel */
+        .revision-panel { margin-top: 12px; padding: 16px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; }
+        .revision-panel textarea { width: 100%; min-height: 80px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; margin-bottom: 10px; resize: vertical; }
+        .aspect-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+        .aspect-tag { padding: 3px 10px; background: #dbeafe; color: #1e40af; border-radius: 20px; font-size: 11px; }
+        .revision-round { font-size: 12px; color: var(--text-secondary); margin-left: 8px; }
 
-        .form-group input,
-        .form-group select {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 14px;
-        }
+        /* Skills reference */
+        .skills-ref { background: #eff6ff; padding: 12px 16px; border-radius: 6px; border-left: 3px solid var(--primary); margin-top: 12px; }
+        .skills-ref h4 { font-size: 13px; color: var(--primary); margin-bottom: 6px; }
+        .skills-ref ul { padding-left: 18px; font-size: 13px; }
 
-        .btn {
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
-            width: 100%;
-            transition: background 0.3s;
-        }
+        /* Status badges */
+        .badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+        .badge-secondary { background: #f3f4f6; color: #4b5563; }
 
-        .btn:hover {
-            background: #5568d3;
-        }
+        /* Loading */
+        .loading-box { text-align: center; padding: 40px; color: var(--text-secondary); }
+        .spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 12px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        .btn-secondary {
-            background: #6c757d;
-        }
+        /* Stream Box */
+        .stream-box { padding: 16px; max-height: 600px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); }
+        .stream-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--primary); font-size: 13px; }
+        .spinner-sm { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
 
-        .btn-secondary:hover {
-            background: #5a6268;
-        }
+        /* Code Preview */
+        .code-preview { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+        .code-preview-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #f8f9fa; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text); user-select: none; }
+        .code-preview-header:hover { background: #eef0f2; }
+        .code-preview-header i { font-size: 11px; color: var(--text-secondary); width: 12px; }
+        .code-preview pre { margin: 0; padding: 14px; background: #fafbfc; max-height: 500px; overflow: auto; font-size: 12.5px; line-height: 1.6; border-top: 1px solid var(--border); }
+        .code-preview pre code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
 
-        .btn-success {
-            background: #28a745;
-        }
+        /* Toast */
+        .toast-container { position: fixed; top: 72px; right: 24px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+        .toast { padding: 12px 20px; border-radius: 8px; color: #fff; font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.15); animation: slideIn .3s ease; max-width: 400px; display: flex; align-items: center; gap: 8px; }
+        .toast-success { background: var(--success); }
+        .toast-error { background: var(--danger); }
+        .toast-info { background: var(--info); }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
-        .btn-success:hover {
-            background: #218838;
-        }
+        /* Chat */
+        .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - var(--header-h) - 40px); }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 16px; background: var(--bg); border-radius: 8px; margin-bottom: 12px; }
+        .chat-bubble { max-width: 80%; margin-bottom: 12px; clear: both; }
+        .chat-bubble.user { float: right; }
+        .chat-bubble.assistant { float: left; }
+        .chat-bubble .bubble-inner { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.6; }
+        .chat-bubble.user .bubble-inner { background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
+        .chat-bubble.assistant .bubble-inner { background: #fff; border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+        .chat-bubble.assistant .bubble-inner .md-content { background: transparent; padding: 0; }
+        .chat-input-bar { display: flex; gap: 8px; }
+        .chat-input-bar input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
+        .chat-input-bar input:focus { outline: none; border-color: var(--primary); }
 
-        .btn-warning {
-            background: #ffc107;
-            color: #333;
-        }
+        /* Sessions table */
+        .table { width: 100%; border-collapse: collapse; }
+        .table th, .table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
+        .table th { background: var(--bg); font-weight: 600; color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .3px; }
+        .table tr:hover td { background: #fafbfc; }
 
-        .content-area {
-            background: white;
-            border-radius: 10px;
-            padding: 30px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            min-height: 600px;
-        }
+        /* Log entries */
+        .log-entry { padding: 12px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; font-size: 13px; }
+        .log-meta { display: flex; gap: 16px; flex-wrap: wrap; color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; }
+        .log-meta span { display: flex; align-items: center; gap: 4px; }
 
-        .workflow-steps {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 30px;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 10px;
-        }
+        /* Problem definition display */
+        .pd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .pd-item { padding: 12px; background: var(--bg); border-radius: 6px; }
+        .pd-item .pd-label { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 4px; }
+        .pd-item .pd-value { font-size: 14px; }
+        .pd-list { padding-left: 16px; font-size: 13px; }
 
-        .step {
-            text-align: center;
-            flex: 1;
-            position: relative;
-        }
+        /* Split stats */
+        .split-stats { display: flex; gap: 16px; margin: 12px 0; }
+        .split-stat { flex: 1; text-align: center; padding: 16px; background: var(--bg); border-radius: 8px; }
+        .split-stat .num { font-size: 24px; font-weight: 700; color: var(--primary); }
+        .split-stat .lbl { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
-        .step:not(:last-child)::after {
-            content: '';
-            position: absolute;
-            top: 20px;
-            right: -50%;
-            width: 100%;
-            height: 2px;
-            background: #ddd;
-            z-index: 0;
-        }
+        /* Asset list */
+        .asset-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--bg); border-radius: 6px; margin-bottom: 6px; }
+        .asset-name { font-size: 13px; display: flex; align-items: center; gap: 8px; }
+        .asset-name i { color: var(--text-secondary); }
 
-        .step-number {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: #ddd;
-            color: #666;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 10px;
-            font-weight: bold;
-            position: relative;
-            z-index: 1;
-        }
+        /* Prediction */
+        .pred-result { margin-top: 16px; padding: 16px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }
 
-        .step.active .step-number {
-            background: #667eea;
-            color: white;
-        }
+        /* Empty state */
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+        .empty-state i { font-size: 48px; margin-bottom: 16px; opacity: .3; }
+        .empty-state p { font-size: 14px; }
 
-        .step.completed .step-number {
-            background: #28a745;
-            color: white;
-        }
-
-        .step-title {
-            font-size: 12px;
-            color: #666;
-        }
-
-        .step.active .step-title {
-            color: #667eea;
-            font-weight: bold;
-        }
-
-        .panel {
-            display: none;
-        }
-
-        .panel.active {
-            display: block;
-        }
-
-        .panel h2 {
-            margin-bottom: 20px;
-            color: #333;
-        }
-
-        .markdown-content {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 5px;
-            margin: 20px 0;
-        }
-
-        .markdown-content h1,
-        .markdown-content h2,
-        .markdown-content h3 {
-            margin: 20px 0 10px;
-        }
-
-        .markdown-content pre {
-            background: #f4f4f4;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
-        }
-
-        .markdown-content code {
-            background: #f4f4f4;
-            padding: 2px 6px;
-            border-radius: 3px;
-        }
-
-        .confirmation-actions {
-            display: flex;
-            gap: 10px;
-            margin-top: 20px;
-            padding: 20px;
-            background: #fff3cd;
-            border-radius: 5px;
-            border: 1px solid #ffc107;
-        }
-
-        .status-message {
-            padding: 15px;
-            border-radius: 5px;
-            margin: 20px 0;
-        }
-
-        .status-message.success {
-            background: #d4edda;
-            border: 1px solid #28a745;
-            color: #155724;
-        }
-
-        .status-message.error {
-            background: #f8d7da;
-            border: 1px solid #dc3545;
-            color: #721c24;
-        }
-
-        .status-message.info {
-            background: #d1ecf1;
-            border: 1px solid #17a2b8;
-            color: #0c5460;
-        }
-
-        .assets-list {
-            margin-top: 20px;
-        }
-
-        .asset-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px;
-            background: #f8f9fa;
-            margin-bottom: 10px;
-            border-radius: 5px;
-        }
-
-        .asset-item a {
-            color: #667eea;
-            text-decoration: none;
-        }
-
-        .asset-item a:hover {
-            text-decoration: underline;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 40px;
-        }
-
-        .loading-spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .chat-container {
-            height: 400px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 15px;
-            background: #f8f9fa;
-        }
-
-        .chat-message {
-            margin-bottom: 15px;
-            padding: 10px;
-            border-radius: 5px;
-        }
-
-        .chat-message.user {
-            background: #667eea;
-            color: white;
-            margin-left: 20%;
-        }
-
-        .chat-message.assistant {
-            background: white;
-            border: 1px solid #ddd;
-            margin-right: 20%;
-        }
-
-        .chat-input {
-            display: flex;
-            padding: 10px;
-            background: white;
-            border-top: 1px solid #ddd;
-        }
-
-        .chat-input input {
-            flex: 1;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            margin-right: 10px;
-        }
-
-        .skills-reference {
-            background: #e7f3ff;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 15px 0;
-            border-left: 4px solid #667eea;
-        }
-
-        .skills-reference h4 {
-            margin-bottom: 10px;
-            color: #667eea;
-        }
-
-        @media (max-width: 1024px) {
-            .main-layout {
-                grid-template-columns: 1fr;
-            }
-
-            .workflow-steps {
-                flex-wrap: wrap;
-            }
-
-            .step {
-                flex: 0 0 50%;
-                margin-bottom: 20px;
-            }
-
-            .step:not(:last-child)::after {
-                display: none;
-            }
+        /* Responsive */
+        @media (max-width: 900px) {
+            .sidebar { display: none; }
+            .main-content { margin-left: 0; }
+            .pd-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>AutoML 交互式建模平台</h1>
-            <p>基于大模型的自动化机器学习工作流</p>
-        </header>
-
-        <div class="main-layout">
-            <aside class="sidebar">
-                <h3>工作流配置</h3>
-                
-                <div class="form-group">
-                    <label for="sessionId">会话 ID</label>
-                    <input type="text" id="sessionId" placeholder="输入会话ID">
-                </div>
-
-                <div class="form-group">
-                    <label for="dataPath">数据文件路径</label>
-                    <input type="text" id="dataPath" placeholder="例如: data.csv">
-                </div>
-
-                <div class="form-group">
-                    <label for="targetColumn">目标列名</label>
-                    <input type="text" id="targetColumn" placeholder="例如: target">
-                </div>
-
-                <div class="form-group">
-                    <label for="taskType">任务类型</label>
-                    <select id="taskType">
-                        <option value="classification">分类</option>
-                        <option value="regression">回归</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="model">模型</label>
-                    <select id="model">
-                        <option value="claude-sonnet-4-20250514-thinking">Claude Sonnet</option>
-                        <option value="claude-opus-4-20250514">Claude Opus</option>
-                    </select>
-                </div>
-
-                <button class="btn" onclick="startWorkflow()">启动工作流</button>
-                
-                <div style="margin-top: 20px;">
-                    <button class="btn btn-secondary" onclick="generateReport()">生成报告</button>
-                </div>
-                
-                <div style="margin-top: 10px;">
-                    <button class="btn btn-secondary" onclick="generatePipeline()">生成全流程脚本</button>
-                </div>
-            </aside>
-
-            <main class="content-area">
-                <div class="workflow-steps">
-                    <div class="step active" data-step="1">
-                        <div class="step-number">1</div>
-                        <div class="step-title">数据上传</div>
-                    </div>
-                    <div class="step" data-step="2">
-                        <div class="step-number">2</div>
-                        <div class="step-title">数据清洗</div>
-                    </div>
-                    <div class="step" data-step="3">
-                        <div class="step-number">3</div>
-                        <div class="step-title">特征工程</div>
-                    </div>
-                    <div class="step" data-step="4">
-                        <div class="step-number">4</div>
-                        <div class="step-title">模型训练</div>
-                    </div>
-                    <div class="step" data-step="5">
-                        <div class="step-number">5</div>
-                        <div class="step-title">结果输出</div>
-                    </div>
-                </div>
-
-                <!-- 数据上传面板 -->
-                <div class="panel active" id="panel-upload">
-                    <h2>数据上传</h2>
-                    <p>请配置左侧的工作流参数，然后点击"启动工作流"按钮开始。</p>
-                    
-                    <div id="upload-status"></div>
-                </div>
-
-                <!-- 数据清洗面板 -->
-                <div class="panel" id="panel-cleaning">
-                    <h2>数据清洗</h2>
-                    <div id="cleaning-content">
-                        <button class="btn" onclick="runStage('data_cleaning')">生成清洗方案</button>
-                    </div>
-                    <div id="cleaning-proposal"></div>
-                    <div id="cleaning-actions"></div>
-                </div>
-
-                <!-- 特征工程面板 -->
-                <div class="panel" id="panel-feature">
-                    <h2>特征工程</h2>
-                    <div id="feature-content">
-                        <button class="btn" onclick="runStage('feature_engineering')">生成特征工程方案</button>
-                    </div>
-                    <div id="feature-proposal"></div>
-                    <div id="feature-actions"></div>
-                </div>
-
-                <!-- 模型训练面板 -->
-                <div class="panel" id="panel-model">
-                    <h2>模型训练</h2>
-                    <div id="model-content">
-                        <button class="btn" onclick="runStage('model_training')">生成建模方案</button>
-                    </div>
-                    <div id="model-proposal"></div>
-                    <div id="model-actions"></div>
-                </div>
-
-                <!-- 结果输出面板 -->
-                <div class="panel" id="panel-result">
-                    <h2>结果输出</h2>
-                    <div id="result-content">
-                        <h3>模型评估结果</h3>
-                        <div id="evaluation-results"></div>
-                        
-                        <h3 style="margin-top: 30px;">资产下载</h3>
-                        <div id="assets-list" class="assets-list"></div>
-                    </div>
-                </div>
-
-                <!-- 对话面板 -->
-                <div class="panel" id="panel-chat">
-                    <h2>智能助手</h2>
-                    <div class="chat-container">
-                        <div class="chat-messages" id="chat-messages"></div>
-                        <div class="chat-input">
-                            <input type="text" id="chat-input" placeholder="输入消息...">
-                            <button class="btn" onclick="sendMessage()">发送</button>
-                        </div>
-                    </div>
-                </div>
-            </main>
+<div id="app">
+    <!-- Toast notifications -->
+    <div class="toast-container">
+        <div v-for="(t, i) in toasts" :key="i" :class="'toast toast-' + t.type">
+            <i :class="t.type === 'success' ? 'fas fa-check-circle' : t.type === 'error' ? 'fas fa-exclamation-circle' : 'fas fa-info-circle'"></i>
+            {{ t.message }}
         </div>
     </div>
 
-    <script>
-        const API_BASE_URL = 'http://localhost:8000';
-        let currentSessionId = '';
-        let currentConfirmationId = '';
+    <!-- Header -->
+    <header class="app-header">
+        <div class="logo"><i class="fas fa-robot"></i> AutoML Platform</div>
+        <div class="nav-tabs">
+            <button v-for="tab in tabs" :key="tab.key" :class="['nav-tab', { active: activeTab === tab.key }]" @click="activeTab = tab.key">
+                <i :class="tab.icon" style="margin-right:4px"></i> {{ tab.label }}
+            </button>
+        </div>
+        <div class="header-right">
+            <span v-if="sessionId" style="font-size:12px;opacity:.8"><i class="fas fa-link"></i> {{ sessionId }}</span>
+        </div>
+    </header>
 
-        // 显示状态消息
-        function showStatus(message, type = 'info') {
-            const statusDiv = document.getElementById('upload-status');
-            statusDiv.innerHTML = `<div class="status-message ${type}">${message}</div>`;
-        }
-
-        // 启动工作流
-        async function startWorkflow() {
-            const sessionId = document.getElementById('sessionId').value;
-            const dataPath = document.getElementById('dataPath').value;
-            const targetColumn = document.getElementById('targetColumn').value;
-            const taskType = document.getElementById('taskType').value;
-            const model = document.getElementById('model').value;
-
-            if (!sessionId || !dataPath || !targetColumn) {
-                showStatus('请填写所有必填字段', 'error');
-                return;
-            }
-
-            currentSessionId = sessionId;
-
-            try {
-                const response = await fetch(`${API_BASE_URL}/workflow/start`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        session_id: sessionId,
-                        data_path: dataPath,
-                        target_column: targetColumn,
-                        task_type: taskType,
-                        model: model
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    showStatus('工作流已启动', 'success');
-                    updateStepStatus(2);
-                    showPanel('panel-cleaning');
-                } else {
-                    showStatus(data.message || '启动失败', 'error');
-                }
-            } catch (error) {
-                showStatus('请求失败: ' + error.message, 'error');
-            }
-        }
-
-        // 运行阶段
-        async function runStage(stage) {
-            if (!currentSessionId) {
-                showStatus('请先启动工作流', 'error');
-                return;
-            }
-
-            const contentDiv = document.getElementById(`${stage.replace('_', '-')}-content`);
-            contentDiv.innerHTML = '<div class="loading"><div class="loading-spinner"></div>正在生成方案...</div>';
-
-            try {
-                const response = await fetch(`${API_BASE_URL}/workflow/${currentSessionId}/stage/${stage}/run`, {
-                    method: 'POST'
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    window._currentModifiableAspects = data.modifiable_aspects || [];
-                    displayProposal(stage, data.proposal);
-                    currentConfirmationId = data.confirmation_id || '';
-                } else {
-                    contentDiv.innerHTML = `<div class="status-message error">生成失败: ${data.error}</div>`;
-                }
-            } catch (error) {
-                contentDiv.innerHTML = `<div class="status-message error">请求失败: ${error.message}</div>`;
-            }
-        }
-
-        // 显示方案
-        function displayProposal(stage, proposal) {
-            const proposalDiv = document.getElementById(`${stage.replace('_', '-')}-proposal`);
-            const actionsDiv = document.getElementById(`${stage.replace('_', '-')}-actions`);
-
-            // 渲染 Markdown
-            proposalDiv.innerHTML = `
-                <div class="markdown-content">
-                    ${marked.parse(proposal)}
+    <div class="app-body">
+        <!-- Sidebar -->
+        <aside class="sidebar" v-show="activeTab === 'workflow'">
+            <h3><i class="fas fa-cog"></i> 工作流配置</h3>
+            <div class="form-group">
+                <label>会话 ID</label>
+                <input v-model="sessionId" placeholder="自动生成">
+            </div>
+            <div class="form-group">
+                <label>数据文件</label>
+                <div style="position:relative">
+                    <label :class="['btn', uploadState.status === 'success' ? 'btn-success' : 'btn-outline', 'btn-block']" style="cursor:pointer;margin-bottom:6px">
+                        <i :class="uploadState.uploading ? 'fas fa-spinner fa-spin' : uploadState.status === 'success' ? 'fas fa-check-circle' : 'fas fa-cloud-upload-alt'"></i>
+                        {{ uploadState.uploading ? '上传中...' : uploadState.filename ? uploadState.filename : '选择文件上传' }}
+                        <input type="file" accept=".csv,.xlsx,.xls,.parquet,.tsv" @change="handleFileUpload" style="display:none" :disabled="uploadState.uploading">
+                    </label>
+                    <div v-if="uploadState.status === 'success'" style="font-size:11px;color:var(--success);margin-bottom:4px">
+                        <i class="fas fa-check"></i> {{ formatFileSize(uploadState.fileSize) }} 已上传
+                    </div>
+                    <div v-if="uploadState.status === 'error'" style="font-size:11px;color:var(--danger);margin-bottom:4px">
+                        <i class="fas fa-times"></i> {{ uploadState.error }}
+                    </div>
+                    <details style="font-size:11px;color:var(--text-secondary)">
+                        <summary style="cursor:pointer">手动输入路径</summary>
+                        <input v-model="config.dataPath" placeholder="服务器上的文件路径" style="margin-top:4px;width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px">
+                    </details>
                 </div>
-                <div class="skills-reference">
-                    <h4>参考的 Skills</h4>
-                    <p>本方案参考了以下专业知识库：</p>
-                    <ul>
-                        ${stage === 'data_cleaning' ? 
-                            '<li>data-analysis-1.0.2 (techniques.md, pitfalls.md)</li>' :
-                          stage === 'feature_engineering' ?
-                            '<li>afrexai-ml-engineering-1.0.0 (Phase 2: Data Engineering)</li>' :
-                            '<li>afrexai-ml-engineering-1.0.0 (Phase 3: Model Selection)</li>'
-                        }
-                    </ul>
-                </div>
-            `;
+            </div>
+            <div class="form-group">
+                <label>目标列名</label>
+                <input v-model="config.targetColumn" placeholder="例如: target">
+            </div>
+            <div class="form-group">
+                <label>任务类型</label>
+                <select v-model="config.taskType">
+                    <option value="classification">分类</option>
+                    <option value="regression">回归</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>LLM 模型</label>
+                <select v-model="config.model">
+                    <option value="claude-opus-4-6">Claude Opus</option>
+                    <option value="kimi-k2.5">Kimi K2.5</option>
+                    <option value="qwen3.6-plus">Qwen 3.6 Plus</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>建模背景描述 (可选)</label>
+                <textarea v-model="config.taskDescription" placeholder="描述业务背景和建模需求..."></textarea>
+            </div>
+            <button class="btn btn-primary btn-block" @click="startWorkflow" :disabled="loading.start">
+                <i class="fas fa-play"></i> {{ loading.start ? '启动中...' : '启动工作流' }}
+            </button>
 
-            // 高亮代码块
-            proposalDiv.querySelectorAll('pre code').forEach((block) => {
-                hljs.highlightBlock(block);
-            });
-
-            // 显示确认操作
-            actionsDiv.innerHTML = `
-                <div class="confirmation-actions">
-                    <button class="btn btn-success" onclick="submitConfirmation('confirmed')">确认执行</button>
-                    <button class="btn btn-warning" onclick="showRevisionPanel()">修改方案</button>
-                    <button class="btn btn-secondary" onclick="submitConfirmation('skipped')">跳过此步骤</button>
-                </div>
-                <div id="revision-panel" style="display: none; margin-top: 15px;">
-                    <div id="modifiable-aspects" style="margin-bottom: 8px;"></div>
-                    <textarea id="revision-input" rows="4" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;" placeholder="请输入您的修改要求..."></textarea>
-                    <div style="margin-top: 8px;">
-                        <button class="btn btn-primary" onclick="submitRevision()">提交修改</button>
-                        <button class="btn btn-secondary" onclick="hideRevisionPanel()">取消</button>
-                        <span id="revision-round" style="margin-left: 10px; color: #888; font-size: 12px;"></span>
+            <!-- Workflow Steps -->
+            <div class="steps-container">
+                <h3 style="margin-top:20px"><i class="fas fa-list-ol"></i> 工作流进度</h3>
+                <div v-for="(s, i) in stages" :key="s.key"
+                     :class="['step-item', { active: currentStageIndex === i, completed: stageStatus[s.key] === 'completed', error: stageStatus[s.key] === 'error' }]"
+                     @click="goToStage(i)">
+                    <div class="step-dot">
+                        <template v-if="stageStatus[s.key] === 'completed'"><i class="fas fa-check" style="font-size:10px"></i></template>
+                        <template v-else-if="stageStatus[s.key] === 'error'"><i class="fas fa-times" style="font-size:10px"></i></template>
+                        <template v-else>{{ i + 1 }}</template>
+                    </div>
+                    <div class="step-info">
+                        <div class="step-title">{{ s.label }}</div>
+                        <div class="step-desc">{{ s.desc }}</div>
                     </div>
                 </div>
-            `;
+            </div>
 
-            // 显示可修改维度提示
-            if (window._currentModifiableAspects && window._currentModifiableAspects.length > 0) {
-                const aspectsDiv = document.getElementById('modifiable-aspects');
-                aspectsDiv.innerHTML = '<span style="color: #666; font-size: 12px;">可修改维度: </span>' +
-                    window._currentModifiableAspects.map(a => `<span style="display: inline-block; padding: 2px 8px; margin: 2px; background: #e8f0fe; border-radius: 12px; font-size: 12px; color: #1a73e8;">${a}</span>`).join('');
-            }
+            <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
+                <button class="btn btn-outline btn-block btn-sm" @click="generateReport" :disabled="!sessionId">
+                    <i class="fas fa-file-alt"></i> 生成报告
+                </button>
+                <button class="btn btn-outline btn-block btn-sm" @click="generatePipeline" :disabled="!sessionId">
+                    <i class="fas fa-code"></i> 生成 Pipeline
+                </button>
+            </div>
+        </aside>
 
-            // 清空加载状态
-            document.getElementById(`${stage.replace('_', '-')}-content`).innerHTML = '';
-        }
+        <!-- Main content -->
+        <div class="main-content" :style="activeTab !== 'workflow' ? 'margin-left:0' : ''">
 
-        // 显示/隐藏修订面板
-        function showRevisionPanel() {
-            document.getElementById('revision-panel').style.display = 'block';
-            document.getElementById('revision-input').focus();
-        }
-        function hideRevisionPanel() {
-            document.getElementById('revision-panel').style.display = 'none';
-            document.getElementById('revision-input').value = '';
-        }
+            <!-- ==================== WORKFLOW TAB ==================== -->
+            <template v-if="activeTab === 'workflow'">
 
-        // 提交方案修订
-        async function submitRevision() {
-            const modifications = document.getElementById('revision-input').value.trim();
-            if (!modifications) return;
+                <!-- Stage 1: Data Upload -->
+                <div v-if="currentStageIndex === 0" class="card">
+                    <div class="card-header"><div class="card-title"><i class="fas fa-upload"></i> 数据上传</div></div>
+                    <p style="color:var(--text-secondary)">请在左侧配置工作流参数，然后点击「启动工作流」按钮。启动后将自动开始问题定义阶段。</p>
+                    <div v-if="stageResults.data_upload" class="pred-result" style="margin-top:16px">
+                        <p><i class="fas fa-check-circle" style="color:var(--success)"></i> <strong>工作流已启动</strong></p>
+                        <p style="font-size:13px;color:var(--text-secondary);margin-top:4px">{{ stageResults.data_upload.message }}</p>
+                    </div>
+                </div>
 
-            try {
-                const response = await fetch(`${API_BASE_URL}/confirmation/revise`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_id: currentSessionId,
-                        confirmation_id: currentConfirmationId,
-                        modifications: modifications
-                    })
-                });
+                <!-- Stage 2: Problem Definition -->
+                <div v-if="currentStageIndex === 1" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-bullseye"></i> 问题定义</div>
+                        <button class="btn btn-primary btn-sm" @click="runStage('problem_definition')" :disabled="loading.stage" v-if="!stageData.problem_definition">
+                            <i class="fas fa-play"></i> 生成问题定义
+                        </button>
+                    </div>
+                    <div v-if="runningStage === 'problem_definition'" class="loading-box"><div class="spinner"></div>正在分析数据并生成问题定义...</div>
+                    <template v-else-if="stageData.problem_definition">
+                        <div v-if="stageData.problem_definition.problem_definition" class="pd-grid">
+                            <div class="pd-item"><div class="pd-label">任务类型</div><div class="pd-value">{{ stageData.problem_definition.problem_definition.task_type }}</div></div>
+                            <div class="pd-item"><div class="pd-label">目标列</div><div class="pd-value">{{ stageData.problem_definition.problem_definition.target_column }}</div></div>
+                            <div class="pd-item"><div class="pd-label">预测目标</div><div class="pd-value">{{ stageData.problem_definition.problem_definition.prediction_target }}</div></div>
+                            <div class="pd-item"><div class="pd-label">主要指标</div><div class="pd-value">{{ stageData.problem_definition.problem_definition.primary_metric }}</div></div>
+                        </div>
+                        <div v-if="stageData.problem_definition.proposal" class="md-content" style="margin-top:16px" v-html="renderMd(stageData.problem_definition.proposal)"></div>
+                        <div v-if="stageData.problem_definition.requires_confirmation" class="confirm-bar">
+                            <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
+                            <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
+                            <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
+                            <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
+                        </div>
+                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                    </template>
+                </div>
 
-                const data = await response.json();
-                if (data.success) {
-                    // 更新确认ID和方案显示
-                    currentConfirmationId = data.confirmation_id;
-                    window._currentModifiableAspects = data.modifiable_aspects || [];
+                <!-- Stage 3: Data Contract Check -->
+                <div v-if="currentStageIndex === 2" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-file-contract"></i> 数据契约检查</div>
+                        <button class="btn btn-primary btn-sm" @click="runStage('data_contract_check')" :disabled="loading.stage" v-if="!stageData.data_contract_check">
+                            <i class="fas fa-play"></i> 运行检查
+                        </button>
+                    </div>
+                    <div v-if="runningStage === 'data_contract_check'" class="loading-box"><div class="spinner"></div>正在检查数据契约...</div>
+                    <template v-else-if="stageData.data_contract_check">
+                        <div style="margin-bottom:12px">
+                            <span :class="stageData.data_contract_check.modelable ? 'badge badge-success' : 'badge badge-danger'">
+                                {{ stageData.data_contract_check.modelable ? '可建模' : '不可建模' }}
+                            </span>
+                        </div>
+                        <div v-if="stageData.data_contract_check.proposal" class="md-content" v-html="renderMd(stageData.data_contract_check.proposal)"></div>
+                        <div v-if="stageData.data_contract_check.risk_list && stageData.data_contract_check.risk_list.length" style="margin-top:12px">
+                            <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-exclamation-triangle" style="color:var(--warning)"></i> 风险项</h4>
+                            <ul class="pd-list"><li v-for="r in stageData.data_contract_check.risk_list" :key="r">{{ r }}</li></ul>
+                        </div>
+                        <div v-if="stageData.data_contract_check.requires_confirmation" class="confirm-bar">
+                            <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
+                            <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
+                            <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
+                        </div>
+                    </template>
+                </div>
 
-                    // 更新方案内容
-                    const proposalDiv = document.getElementById('confirmation-proposal');
-                    proposalDiv.innerHTML = marked.parse(data.proposal);
-                    proposalDiv.querySelectorAll('pre code').forEach((block) => {
-                        hljs.highlightBlock(block);
-                    });
+                <!-- Stage 4: Data Splitting -->
+                <div v-if="currentStageIndex === 3" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-columns"></i> 数据拆分</div>
+                        <button class="btn btn-primary btn-sm" @click="runStage('data_splitting')" :disabled="loading.stage" v-if="!stageData.data_splitting">
+                            <i class="fas fa-play"></i> 生成拆分方案
+                        </button>
+                    </div>
+                    <div v-if="runningStage === 'data_splitting' && revising.data_splitting" class="loading-box"><div class="spinner"></div>正在根据修改意见修订拆分方案...</div>
+                    <div v-else-if="runningStage === 'data_splitting'" class="loading-box"><div class="spinner"></div>正在分析并生成拆分方案...</div>
+                    <template v-else-if="stageData.data_splitting">
+                        <div style="margin-bottom:12px">
+                            <span class="badge badge-info">策略: {{ stageData.data_splitting.split_strategy }}</span>
+                        </div>
+                        <div v-if="stageData.data_splitting.counts" class="split-stats">
+                            <div class="split-stat"><div class="num">{{ stageData.data_splitting.counts.train }}</div><div class="lbl">训练集</div></div>
+                            <div class="split-stat"><div class="num">{{ stageData.data_splitting.counts.valid || '-' }}</div><div class="lbl">验证集</div></div>
+                            <div class="split-stat"><div class="num">{{ stageData.data_splitting.counts.test }}</div><div class="lbl">测试集</div></div>
+                        </div>
+                        <div v-if="stageData.data_splitting.proposal" class="md-content" v-html="renderMd(stageData.data_splitting.proposal)"></div>
+                        <div v-if="stageData.data_splitting.warnings && stageData.data_splitting.warnings.length" style="margin-top:12px;padding:10px;background:#fef3c7;border-radius:6px">
+                            <p v-for="w in stageData.data_splitting.warnings" :key="w" style="font-size:13px;color:#92400e"><i class="fas fa-exclamation-triangle"></i> {{ w }}</p>
+                        </div>
+                        <div v-if="stageData.data_splitting.requires_confirmation" class="confirm-bar">
+                            <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
+                            <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
+                            <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
+                            <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
+                        </div>
+                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                    </template>
+                </div>
 
-                    // 更新修订轮次
-                    const roundSpan = document.getElementById('revision-round');
-                    if (roundSpan && data.revision_round) {
-                        roundSpan.textContent = `第 ${data.revision_round} 轮修订`;
-                    }
-
-                    // 清空输入并隐藏面板
-                    hideRevisionPanel();
-                } else {
-                    alert('修订失败: ' + (data.error || data.detail || '未知错误'));
-                }
-            } catch (error) {
-                alert('修订请求失败: ' + error.message);
-            }
-        }
-
-        // 提交确认
-        async function submitConfirmation(status) {
-            let modifications = null;
-
-            try {
-                const response = await fetch(`${API_BASE_URL}/confirmation/submit`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        session_id: currentSessionId,
-                        confirmation_id: currentConfirmationId,
-                        status: status,
-                        modifications: modifications
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    // 根据当前阶段进入下一步
-                    const currentPanel = document.querySelector('.panel.active').id;
-                    if (currentPanel === 'panel-cleaning') {
-                        updateStepStatus(3);
-                        showPanel('panel-feature');
-                    } else if (currentPanel === 'panel-feature') {
-                        updateStepStatus(4);
-                        showPanel('panel-model');
-                    } else if (currentPanel === 'panel-model') {
-                        updateStepStatus(5);
-                        showPanel('panel-result');
-                        loadResults();
-                    }
-                }
-            } catch (error) {
-                showStatus('提交失败: ' + error.message, 'error');
-            }
-        }
-
-        // 更新步骤状态
-        function updateStepStatus(stepNumber) {
-            document.querySelectorAll('.step').forEach((step, index) => {
-                if (index < stepNumber - 1) {
-                    step.classList.add('completed');
-                    step.classList.remove('active');
-                } else if (index === stepNumber - 1) {
-                    step.classList.add('active');
-                    step.classList.remove('completed');
-                } else {
-                    step.classList.remove('active', 'completed');
-                }
-            });
-        }
-
-        // 显示面板
-        function showPanel(panelId) {
-            document.querySelectorAll('.panel').forEach(panel => {
-                panel.classList.remove('active');
-            });
-            document.getElementById(panelId).classList.add('active');
-        }
-
-        // 加载结果
-        async function loadResults() {
-            // 加载评估结果
-            try {
-                const response = await fetch(`${API_BASE_URL}/assets/${currentSessionId}/list`);
-                const data = await response.json();
-
-                const assetsListDiv = document.getElementById('assets-list');
-                let html = '';
-
-                for (const [type, assets] of Object.entries(data.assets)) {
-                    html += `<h4>${type}</h4>`;
-                    assets.forEach(asset => {
-                        html += `
-                            <div class="asset-item">
-                                <span>${asset.name}</span>
-                                <a href="${asset.url}" download>下载</a>
+                <!-- Stage 5: Data Cleaning -->
+                <div v-if="currentStageIndex === 4" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-broom"></i> 数据清洗</div>
+                        <button class="btn btn-primary btn-sm" @click="runStage('data_cleaning')" :disabled="loading.stage" v-if="!stageData.data_cleaning">
+                            <i class="fas fa-play"></i> 生成清洗方案
+                        </button>
+                    </div>
+                    <!-- 方案生成流式输出 -->
+                    <div v-if="runningStage === 'data_cleaning' && stageStreaming.data_cleaning && stageStreamContent" class="stream-box">
+                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成方案中...</span></div>
+                        <div class="md-content" v-html="renderMd(stageStreamContent)"></div>
+                    </div>
+                    <!-- 代码生成流式输出 -->
+                    <div v-else-if="runningStage === 'data_cleaning' && confirmStreaming.data_cleaning" class="stream-box">
+                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
+                        <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
+                        <div v-if="stageGeneratedCode.data_cleaning" class="code-preview">
+                            <div class="code-preview-header" @click="toggleCodePreview('data_cleaning')">
+                                <i :class="codePreviewExpanded.data_cleaning ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                <span>生成的代码</span>
                             </div>
-                        `;
-                    });
+                            <pre v-if="codePreviewExpanded.data_cleaning"><code class="language-python" v-html="highlightCode(stageGeneratedCode.data_cleaning)"></code></pre>
+                        </div>
+                    </div>
+                    <!-- 确认执行中（非流式降级） -->
+                    <div v-else-if="runningStage === 'data_cleaning' && confirmExecuting.data_cleaning" class="loading-box"><div class="spinner"></div>正在生成并执行清洗代码...</div>
+                    <div v-else-if="runningStage === 'data_cleaning' && revising.data_cleaning" class="loading-box"><div class="spinner"></div>正在根据修改意见修订清洗方案...</div>
+                    <div v-else-if="runningStage === 'data_cleaning'" class="loading-box"><div class="spinner"></div>正在分析数据质量并生成清洗方案...</div>
+                    <template v-else-if="stageData.data_cleaning">
+                        <div v-if="stageData.data_cleaning.proposal" class="md-content" v-html="renderMd(stageData.data_cleaning.proposal)"></div>
+                        <skills-ref :skills="stageData.data_cleaning.skills_referenced"></skills-ref>
+                        <!-- 生成的代码展示 -->
+                        <div v-if="stageGeneratedCode.data_cleaning && stageStatus.data_cleaning === 'completed'" class="code-preview" style="margin-top:12px">
+                            <div class="code-preview-header" @click="toggleCodePreview('data_cleaning')">
+                                <i :class="codePreviewExpanded.data_cleaning ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                <span>生成的代码</span>
+                                <span class="badge badge-success" style="margin-left:8px;font-size:11px">已执行</span>
+                            </div>
+                            <pre v-if="codePreviewExpanded.data_cleaning"><code class="language-python" v-html="highlightCode(stageGeneratedCode.data_cleaning)"></code></pre>
+                        </div>
+                        <div v-if="stageData.data_cleaning.requires_confirmation" class="confirm-bar">
+                            <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
+                            <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
+                            <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
+                            <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
+                        </div>
+                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                    </template>
+                </div>
+
+                <!-- Stage 6: Data Exploration -->
+                <div v-if="currentStageIndex === 5" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-chart-bar"></i> 数据探索</div>
+                        <button class="btn btn-primary btn-sm" @click="runStage('data_exploration')" :disabled="loading.stage" v-if="!stageData.data_exploration">
+                            <i class="fas fa-play"></i> 运行探索分析
+                        </button>
+                    </div>
+                    <div v-if="runningStage === 'data_exploration'" class="loading-box"><div class="spinner"></div>正在进行数据探索分析...</div>
+                    <template v-else-if="stageData.data_exploration">
+                        <div class="md-content" v-html="renderMd(stageData.data_exploration.exploration || stageData.data_exploration.proposal || '')"></div>
+                    </template>
+                </div>
+
+                <!-- Stage 7: Feature Engineering -->
+                <div v-if="currentStageIndex === 6" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-magic"></i> 特征工程</div>
+                        <button class="btn btn-primary btn-sm" @click="runStage('feature_engineering')" :disabled="loading.stage" v-if="!stageData.feature_engineering">
+                            <i class="fas fa-play"></i> 生成特征工程方案
+                        </button>
+                    </div>
+                    <!-- 方案生成流式输出 -->
+                    <div v-if="runningStage === 'feature_engineering' && stageStreaming.feature_engineering && stageStreamContent" class="stream-box">
+                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成方案中...</span></div>
+                        <div class="md-content" v-html="renderMd(stageStreamContent)"></div>
+                    </div>
+                    <!-- 代码生成流式输出 -->
+                    <div v-else-if="runningStage === 'feature_engineering' && confirmStreaming.feature_engineering" class="stream-box">
+                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
+                        <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
+                        <div v-if="stageGeneratedCode.feature_engineering" class="code-preview">
+                            <div class="code-preview-header" @click="toggleCodePreview('feature_engineering')">
+                                <i :class="codePreviewExpanded.feature_engineering ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                <span>生成的代码</span>
+                            </div>
+                            <pre v-if="codePreviewExpanded.feature_engineering"><code class="language-python" v-html="highlightCode(stageGeneratedCode.feature_engineering)"></code></pre>
+                        </div>
+                    </div>
+                    <div v-else-if="runningStage === 'feature_engineering' && confirmExecuting.feature_engineering" class="loading-box"><div class="spinner"></div>正在生成并执行特征工程代码...</div>
+                    <div v-else-if="runningStage === 'feature_engineering' && revising.feature_engineering" class="loading-box"><div class="spinner"></div>正在根据修改意见修订特征工程方案...</div>
+                    <div v-else-if="runningStage === 'feature_engineering'" class="loading-box"><div class="spinner"></div>正在生成特征工程方案...</div>
+                    <template v-else-if="stageData.feature_engineering">
+                        <div v-if="stageData.feature_engineering.proposal" class="md-content" v-html="renderMd(stageData.feature_engineering.proposal)"></div>
+                        <skills-ref :skills="stageData.feature_engineering.skills_referenced"></skills-ref>
+                        <!-- 生成的代码展示 -->
+                        <div v-if="stageGeneratedCode.feature_engineering && stageStatus.feature_engineering === 'completed'" class="code-preview" style="margin-top:12px">
+                            <div class="code-preview-header" @click="toggleCodePreview('feature_engineering')">
+                                <i :class="codePreviewExpanded.feature_engineering ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                <span>生成的代码</span>
+                                <span class="badge badge-success" style="margin-left:8px;font-size:11px">已执行</span>
+                            </div>
+                            <pre v-if="codePreviewExpanded.feature_engineering"><code class="language-python" v-html="highlightCode(stageGeneratedCode.feature_engineering)"></code></pre>
+                        </div>
+                        <div v-if="stageData.feature_engineering.requires_confirmation" class="confirm-bar">
+                            <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
+                            <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
+                            <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
+                            <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
+                        </div>
+                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                        <!-- 特征评估（可选子阶段） -->
+                        <div v-if="stageData.feature_engineering.feature_evaluation_pending" class="card" style="margin-top:16px;border:1px solid #e0e0e0;">
+                            <div class="card-header" style="background:#f8f9fa;">
+                                <div class="card-title"><i class="fas fa-chart-line"></i> 特征评估（可选）</div>
+                            </div>
+                            <div class="md-content" v-html="renderMd(stageData.feature_engineering.feature_evaluation_proposal || '')"></div>
+                            <div class="confirm-bar">
+                                <span class="label"><i class="fas fa-hand-point-right"></i> 请选择</span>
+                                <button class="btn btn-success btn-sm" @click="submitFeatureEvaluation('confirmed')" :disabled="runningStage === 'feature_evaluation'"><i class="fas fa-check"></i> 执行特征评估</button>
+                                <button class="btn btn-secondary btn-sm" @click="submitFeatureEvaluation('skipped')" :disabled="runningStage === 'feature_evaluation'"><i class="fas fa-forward"></i> 跳过</button>
+                            </div>
+                        </div>
+                        <div v-if="runningStage === 'feature_evaluation'" class="loading-box" style="margin-top:12px"><div class="spinner"></div>正在执行特征评估...</div>
+                        <!-- 特征评估结果展示 -->
+                        <div v-if="stageData.feature_engineering.feature_evaluation_report" class="card" style="margin-top:16px;border:1px solid #e0e0e0;">
+                            <div class="card-header" style="background:#f0f7f0;">
+                                <div class="card-title"><i class="fas fa-chart-line"></i> 特征评估报告</div>
+                                <span class="badge badge-success" style="font-size:11px">已完成</span>
+                            </div>
+                            <div class="md-content" v-html="renderMd(stageData.feature_engineering.feature_evaluation_report)"></div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Stage 8: Model Training -->
+                <div v-if="currentStageIndex === 7" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-brain"></i> 模型训练</div>
+                        <button class="btn btn-primary btn-sm" @click="runStage('model_training')" :disabled="loading.stage" v-if="!stageData.model_training">
+                            <i class="fas fa-play"></i> 生成建模方案
+                        </button>
+                    </div>
+                    <!-- 方案生成流式输出 -->
+                    <div v-if="runningStage === 'model_training' && stageStreaming.model_training && stageStreamContent" class="stream-box">
+                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成方案中...</span></div>
+                        <div class="md-content" v-html="renderMd(stageStreamContent)"></div>
+                    </div>
+                    <!-- 代码生成流式输出 -->
+                    <div v-else-if="runningStage === 'model_training' && confirmStreaming.model_training" class="stream-box">
+                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
+                        <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
+                        <div v-if="stageGeneratedCode.model_training" class="code-preview">
+                            <div class="code-preview-header" @click="toggleCodePreview('model_training')">
+                                <i :class="codePreviewExpanded.model_training ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                <span>生成的代码</span>
+                            </div>
+                            <pre v-if="codePreviewExpanded.model_training"><code class="language-python" v-html="highlightCode(stageGeneratedCode.model_training)"></code></pre>
+                        </div>
+                    </div>
+                    <div v-else-if="runningStage === 'model_training' && confirmExecuting.model_training" class="loading-box"><div class="spinner"></div>正在生成并执行训练代码...</div>
+                    <div v-else-if="runningStage === 'model_training' && revising.model_training" class="loading-box"><div class="spinner"></div>正在根据修改意见修订建模方案...</div>
+                    <div v-else-if="runningStage === 'model_training'" class="loading-box"><div class="spinner"></div>正在生成建模方案...</div>
+                    <template v-else-if="stageData.model_training">
+                        <div v-if="stageData.model_training.proposal" class="md-content" v-html="renderMd(stageData.model_training.proposal)"></div>
+                        <skills-ref :skills="stageData.model_training.skills_referenced"></skills-ref>
+                        <!-- 生成的代码展示 -->
+                        <div v-if="stageGeneratedCode.model_training && stageStatus.model_training === 'completed'" class="code-preview" style="margin-top:12px">
+                            <div class="code-preview-header" @click="toggleCodePreview('model_training')">
+                                <i :class="codePreviewExpanded.model_training ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                <span>生成的代码</span>
+                                <span class="badge badge-success" style="margin-left:8px;font-size:11px">已执行</span>
+                            </div>
+                            <pre v-if="codePreviewExpanded.model_training"><code class="language-python" v-html="highlightCode(stageGeneratedCode.model_training)"></code></pre>
+                        </div>
+                        <!-- 评估结果展示 -->
+                        <div v-if="stageData.model_training && stageData.model_training.evaluation" class="eval-results" style="margin-top:12px">
+                            <div class="card-title" style="font-size:14px"><i class="fas fa-chart-bar"></i> 模型评估结果</div>
+                            <div v-if="stageData.model_training.evaluation.report" class="md-content" v-html="renderMd(stageData.model_training.evaluation.report)"></div>
+                            <div v-else-if="stageData.model_training.evaluation.error" class="alert alert-warning">评估失败: {{ stageData.model_training.evaluation.error }}</div>
+                        </div>
+                        <div v-if="stageData.model_training.requires_confirmation" class="confirm-bar">
+                            <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
+                            <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
+                            <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
+                            <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
+                        </div>
+                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                    </template>
+                </div>
+
+                <!-- Assets card (always visible when workflow started) -->
+                <div v-if="sessionId && assets.length" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-folder-open"></i> 资产文件</div>
+                        <button class="btn btn-outline btn-sm" @click="loadAssets"><i class="fas fa-sync-alt"></i> 刷新</button>
+                    </div>
+                    <div v-for="a in assets" :key="a" class="asset-item">
+                        <span class="asset-name"><i class="fas fa-file"></i> {{ a }}</span>
+                        <a :href="API + '/assets/' + sessionId + '/' + a" target="_blank" class="btn btn-outline btn-sm"><i class="fas fa-download"></i> 下载</a>
+                    </div>
+                </div>
+            </template>
+
+            <!-- ==================== CHAT TAB ==================== -->
+            <template v-if="activeTab === 'chat'">
+                <div class="card" style="height:calc(100vh - var(--header-h) - 40px);display:flex;flex-direction:column;padding:16px">
+                    <div class="card-header" style="margin-bottom:8px">
+                        <div class="card-title"><i class="fas fa-comments"></i> 智能助手</div>
+                        <span v-if="!sessionId" class="badge badge-warning">请先启动工作流</span>
+                    </div>
+                    <div class="chat-messages" ref="chatBox" style="flex:1;overflow-y:auto">
+                        <div v-for="(m, i) in chatMessages" :key="i" :class="'chat-bubble ' + m.role" style="overflow:hidden">
+                            <div class="bubble-inner">
+                                <div v-if="m.role === 'assistant'" class="md-content" v-html="renderMd(m.content)"></div>
+                                <template v-else>{{ m.content }}</template>
+                            </div>
+                        </div>
+                        <div v-if="chatStreaming" class="chat-bubble assistant" style="overflow:hidden">
+                            <div class="bubble-inner">
+                                <div class="md-content" v-html="renderMd(chatStreamContent || '...')"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="chat-input-bar" style="margin-top:8px">
+                        <input v-model="chatInput" placeholder="输入消息..." @keyup.enter="sendChat" :disabled="chatStreaming || !sessionId">
+                        <button class="btn btn-primary" @click="sendChat" :disabled="chatStreaming || !sessionId || !chatInput.trim()">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </template>
+
+            <!-- ==================== SESSIONS TAB ==================== -->
+            <template v-if="activeTab === 'sessions'">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-history"></i> 会话管理</div>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <select v-model="sessionSort" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg)">
+                                <option value="last_updated_desc">最近更新优先</option>
+                                <option value="last_updated_asc">最早更新优先</option>
+                                <option value="created_at_desc">最近创建优先</option>
+                                <option value="created_at_asc">最早创建优先</option>
+                                <option value="session_id_asc">名称 A-Z</option>
+                                <option value="session_id_desc">名称 Z-A</option>
+                                <option value="current_stage_asc">阶段 A-Z</option>
+                            </select>
+                            <button class="btn btn-outline btn-sm" @click="loadSessions"><i class="fas fa-sync-alt"></i> 刷新</button>
+                        </div>
+                    </div>
+                    <div v-if="sessions.length === 0" class="empty-state">
+                        <i class="fas fa-inbox"></i>
+                        <p>暂无会话记录</p>
+                    </div>
+                    <table v-else class="table">
+                        <thead><tr><th>会话 ID</th><th>当前阶段</th><th>创建时间</th><th>最后更新</th><th>操作</th></tr></thead>
+                        <tbody>
+                            <tr v-for="s in sortedSessions" :key="s.session_id">
+                                <td><code style="font-size:12px">{{ s.session_id }}</code></td>
+                                <td><span class="badge badge-info">{{ s.current_stage }}</span></td>
+                                <td>{{ formatTime(s.created_at) }}</td>
+                                <td>{{ formatTime(s.last_updated) }}</td>
+                                <td style="display:flex;gap:6px">
+                                    <button class="btn btn-primary btn-sm" @click="resumeSession(s.session_id)"><i class="fas fa-redo"></i> 恢复</button>
+                                    <button class="btn btn-danger btn-sm" @click="deleteSession(s.session_id)"><i class="fas fa-trash"></i></button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </template>
+
+            <!-- ==================== PREDICT TAB ==================== -->
+            <template v-if="activeTab === 'predict'">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-crosshairs"></i> 模型预测</div>
+                    </div>
+                    <div class="form-group">
+                        <label>会话 ID (已训练模型)</label>
+                        <input v-model="predict.sessionId" :placeholder="sessionId || '输入会话ID'">
+                    </div>
+                    <div class="form-group">
+                        <label>预测数据</label>
+                        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+                            <button :class="['btn', 'btn-sm', predict.inputMode === 'upload' ? 'btn-primary' : 'btn-outline']" @click="predict.inputMode = 'upload'">
+                                <i class="fas fa-upload"></i> 上传文件
+                            </button>
+                            <button :class="['btn', 'btn-sm', predict.inputMode === 'path' ? 'btn-primary' : 'btn-outline']" @click="predict.inputMode = 'path'">
+                                <i class="fas fa-file-alt"></i> 文件路径
+                            </button>
+                        </div>
+                        <div v-if="predict.inputMode === 'upload'" class="upload-zone" @click="$refs.predictFileInput.click()" @dragover.prevent @drop.prevent="handlePredictFileDrop" style="border:2px dashed var(--border);border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:border-color .2s" @dragenter="$event.target.style.borderColor='var(--primary)'" @dragleave="$event.target.style.borderColor='var(--border)'">
+                            <input ref="predictFileInput" type="file" accept=".csv,.xlsx,.xls,.parquet,.tsv" @change="handlePredictFileSelect" style="display:none">
+                            <template v-if="predict.uploadedFile">
+                                <i class="fas fa-check-circle" style="color:var(--success);font-size:24px"></i>
+                                <p style="margin-top:8px;font-weight:600">{{ predict.uploadedFile.name }}</p>
+                                <p style="font-size:12px;color:var(--text-secondary)">{{ formatFileSize(predict.uploadedFile.size) }}</p>
+                            </template>
+                            <template v-else>
+                                <i class="fas fa-cloud-upload-alt" style="font-size:24px;color:var(--text-secondary)"></i>
+                                <p style="margin-top:8px;color:var(--text-secondary)">点击或拖拽上传预测数据文件</p>
+                                <p style="font-size:12px;color:var(--text-secondary)">支持 CSV, Excel, Parquet, TSV</p>
+                            </template>
+                        </div>
+                        <input v-else v-model="predict.dataPath" placeholder="例如: new_data.csv">
+                    </div>
+                    <div class="form-group">
+                        <label>输出目录 (可选)</label>
+                        <input v-model="predict.outputDir" placeholder="默认输出到会话资产目录">
+                    </div>
+                    <button class="btn btn-primary" @click="runPredict" :disabled="loading.predict || (!predict.dataPath && !predict.uploadedFile)">
+                        <i class="fas fa-play"></i> {{ loading.predict ? '预测中...' : '执行预测' }}
+                    </button>
+                    <div v-if="predict.result" class="pred-result">
+                        <p><i class="fas fa-check-circle" style="color:var(--success)"></i> <strong>预测完成</strong></p>
+                        <p style="font-size:13px;margin-top:4px">预测记录数: {{ predict.result.records }}</p>
+                        <p style="font-size:13px">输出路径: <code>{{ predict.result.predictions_path }}</code></p>
+                        <div v-if="predict.result.stdout" style="margin-top:8px">
+                            <pre style="background:#1e293b;color:#e2e8f0;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto">{{ predict.result.stdout }}</pre>
+                        </div>
+                    </div>
+                    <div v-if="predict.error" style="margin-top:12px;padding:12px;background:#fee2e2;border-radius:6px;color:#991b1b;font-size:13px">
+                        <i class="fas fa-exclamation-circle"></i> {{ predict.error }}
+                    </div>
+                </div>
+            </template>
+
+            <!-- ==================== LOGS TAB ==================== -->
+            <template v-if="activeTab === 'logs'">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-scroll"></i> LLM 调用日志</div>
+                        <div style="display:flex;gap:8px;align-items:center">
+                            <input v-model="logs.sessionId" placeholder="会话 ID" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;width:180px" @keyup.enter="loadLogs">
+                            <button class="btn btn-primary btn-sm" @click="loadLogs" :disabled="!logs.sessionId"><i class="fas fa-search"></i> 查询</button>
+                        </div>
+                    </div>
+                    <div v-if="logs.entries.length === 0" class="empty-state">
+                        <i class="fas fa-file-alt"></i>
+                        <p>{{ logs.sessionId ? '该会话暂无日志' : '请输入会话 ID 查询日志' }}</p>
+                    </div>
+                    <div v-for="(log, i) in logs.entries" :key="i" class="log-entry">
+                        <div class="log-meta">
+                            <span><i class="fas fa-clock"></i> {{ formatTime(log.timestamp) }}</span>
+                            <span><i class="fas fa-robot"></i> {{ log.model_name }}</span>
+                            <span><i class="fas fa-layer-group"></i> {{ log.stage }}</span>
+                            <span><i class="fas fa-arrow-right"></i> {{ log.input_tokens }} tok</span>
+                            <span><i class="fas fa-arrow-left"></i> {{ log.output_tokens }} tok</span>
+                            <span><i class="fas fa-stopwatch"></i> {{ log.latency_ms }}ms</span>
+                        </div>
+                        <details>
+                            <summary style="cursor:pointer;font-size:12px;color:var(--primary)">查看详情</summary>
+                            <div style="margin-top:8px">
+                                <p style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:4px">输入:</p>
+                                <pre style="background:#f8fafc;padding:8px;border-radius:4px;font-size:12px;max-height:200px;overflow:auto;white-space:pre-wrap">{{ log.input_content }}</pre>
+                                <p style="font-size:11px;font-weight:600;color:var(--text-secondary);margin:8px 0 4px">输出:</p>
+                                <pre style="background:#f8fafc;padding:8px;border-radius:4px;font-size:12px;max-height:200px;overflow:auto;white-space:pre-wrap">{{ log.output_content }}</pre>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, watch, nextTick, onMounted } = Vue;
+
+const API = 'http://localhost:8000';
+
+// ========== Sub-components ==========
+
+const RevisionPanel = {
+    props: ['aspects', 'round'],
+    emits: ['submit', 'cancel'],
+    template: `
+        <div class="revision-panel">
+            <div v-if="aspects && aspects.length" class="aspect-tags">
+                <span style="font-size:12px;color:var(--text-secondary);margin-right:4px">可修改维度:</span>
+                <span v-for="a in aspects" :key="a" class="aspect-tag">{{ a }}</span>
+            </div>
+            <textarea ref="ta" v-model="text" placeholder="请输入您的修改要求..." @keyup.ctrl.enter="doSubmit"></textarea>
+            <div style="display:flex;align-items:center;gap:8px">
+                <button class="btn btn-primary btn-sm" @click="doSubmit" :disabled="!text.trim()"><i class="fas fa-paper-plane"></i> 提交修改</button>
+                <button class="btn btn-outline btn-sm" @click="$emit('cancel')">取消</button>
+                <span v-if="round" class="revision-round">第 {{ round }} 轮修订</span>
+            </div>
+        </div>
+    `,
+    setup(props, { emit }) {
+        const text = ref('');
+        const ta = ref(null);
+        onMounted(() => { if (ta.value) ta.value.focus(); });
+        const doSubmit = () => { if (text.value.trim()) { emit('submit', text.value); text.value = ''; } };
+        return { text, ta, doSubmit };
+    }
+};
+
+const SkillsRef = {
+    props: ['skills'],
+    template: `
+        <div v-if="skills && skills.length" class="skills-ref">
+            <h4><i class="fas fa-book"></i> 参考的 Skills</h4>
+            <ul><li v-for="s in skills" :key="s.name">{{ s.name }} <span v-if="s.files">({{ s.files.join(', ') }})</span></li></ul>
+        </div>
+    `
+};
+
+// ========== Main App ==========
+
+const app = createApp({
+    components: { 'revision-panel': RevisionPanel, 'skills-ref': SkillsRef },
+
+    setup() {
+        // -- Navigation --
+        const tabs = [
+            { key: 'workflow', label: '工作流', icon: 'fas fa-project-diagram' },
+            { key: 'chat', label: '聊天', icon: 'fas fa-comments' },
+            { key: 'sessions', label: '会话', icon: 'fas fa-history' },
+            { key: 'predict', label: '预测', icon: 'fas fa-crosshairs' },
+            { key: 'logs', label: '日志', icon: 'fas fa-scroll' },
+        ];
+        const activeTab = ref('workflow');
+
+        // -- Stages --
+        const stages = [
+            { key: 'data_upload', label: '数据上传', desc: '上传并配置数据' },
+            { key: 'problem_definition', label: '问题定义', desc: '分析数据定义建模目标' },
+            { key: 'data_contract_check', label: '数据契约检查', desc: '校验数据可建模性' },
+            { key: 'data_splitting', label: '数据拆分', desc: '划分训练/验证/测试集' },
+            { key: 'data_cleaning', label: '数据清洗', desc: '清洗数据质量问题' },
+            { key: 'data_exploration', label: '数据探索', desc: '统计分析与可视化' },
+            { key: 'feature_engineering', label: '特征工程', desc: '特征变换与选择' },
+            { key: 'model_training', label: '模型训练', desc: '模型选择与训练' },
+        ];
+        const currentStageIndex = ref(0);
+        const stageStatus = reactive({});
+        const stageData = reactive({});
+        const stageResults = reactive({});
+
+        // -- Config --
+        const sessionId = ref('session_' + Date.now());
+        const config = reactive({
+            dataPath: '',
+            targetColumn: '',
+            taskType: 'classification',
+            model: 'claude-opus-4-6',
+            taskDescription: '',
+        });
+
+        // -- Loading --
+        const loading = reactive({ start: false, stage: false, predict: false });
+        const runningStage = ref('');  // 当前正在运行的阶段 key
+
+        // -- Upload --
+        const uploadState = reactive({ uploading: false, status: '', filename: '', fileSize: 0, error: '' });
+
+        // -- Confirmation --
+        const currentConfirmationId = ref('');
+        const currentModifiableAspects = ref([]);
+        const showRevision = ref(false);
+        const revisionRound = ref(0);
+
+        // -- Stage Streaming (SSE) --
+        const stageStreamContent = ref('');
+        const stageStreaming = reactive({});
+        const STREAMABLE_STAGES = ['data_cleaning', 'feature_engineering', 'model_training'];
+
+        // -- Confirm execution streaming --
+        const confirmStreaming = reactive({});
+        const confirmExecuting = reactive({});  // 确认执行中（非流式降级时使用）
+        const revising = reactive({});  // 方案修订中
+        const confirmStreamContent = ref('');
+        const stageGeneratedCode = reactive({});
+        const codePreviewExpanded = reactive({});
+
+        // -- Toast --
+        const toasts = ref([]);
+        const toast = (message, type = 'info') => {
+            toasts.value.push({ message, type });
+            setTimeout(() => toasts.value.shift(), 4000);
+        };
+
+        // -- Chat --
+        const chatMessages = ref([]);
+        const chatInput = ref('');
+        const chatStreaming = ref(false);
+        const chatStreamContent = ref('');
+        const chatBox = ref(null);
+
+        // -- Sessions --
+        const sessions = ref([]);
+        const sessionSort = ref('last_updated_desc');  // 会话排序方式
+        const sortedSessions = computed(() => {
+            const list = [...sessions.value];
+            const [field, dir] = sessionSort.value.split('_desc').length > 1
+                ? [sessionSort.value.replace('_desc', ''), 'desc']
+                : [sessionSort.value.replace('_asc', ''), 'asc'];
+            list.sort((a, b) => {
+                let va = a[field] || '', vb = b[field] || '';
+                if (field === 'created_at' || field === 'last_updated') {
+                    va = va || '1970-01-01'; vb = vb || '1970-01-01';
                 }
+                if (va < vb) return dir === 'asc' ? -1 : 1;
+                if (va > vb) return dir === 'asc' ? 1 : -1;
+                return 0;
+            });
+            return list;
+        });
 
-                assetsListDiv.innerHTML = html || '<p>暂无资产</p>';
-            } catch (error) {
-                console.error('加载资产失败:', error);
-            }
-        }
+        // -- Predict --
+        const predict = reactive({ sessionId: '', dataPath: '', outputDir: '', result: null, error: '', inputMode: 'upload', uploadedFile: null });
 
-        // 生成报告
-        async function generateReport() {
-            if (!currentSessionId) {
-                showStatus('请先启动工作流', 'error');
-                return;
-            }
+        // -- Logs --
+        const logs = reactive({ sessionId: '', entries: [] });
 
+        // -- Assets --
+        const assets = ref([]);
+
+        // ========== Helpers ==========
+        const renderMd = (text) => {
+            if (!text) return '';
+            const html = marked.parse(text);
+            // Defer highlight
+            nextTick(() => {
+                document.querySelectorAll('.md-content pre code').forEach(b => { if (!b.dataset.highlighted) { hljs.highlightElement(b); b.dataset.highlighted = '1'; } });
+            });
+            return html;
+        };
+
+        const highlightCode = (code) => {
+            if (!code) return '';
+            try { return hljs.highlight(code, { language: 'python' }).value; } catch { return code; }
+        };
+
+        const toggleCodePreview = (stage) => {
+            codePreviewExpanded[stage] = !codePreviewExpanded[stage];
+        };
+
+        const formatTime = (t) => {
+            if (!t) return '-';
+            try { return new Date(t).toLocaleString('zh-CN'); } catch { return t; }
+        };
+
+        const formatFileSize = (bytes) => {
+            if (!bytes) return '';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        };
+
+        const apiPost = async (url, body) => {
+            const res = await fetch(API + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+            return res.json();
+        };
+        const apiGet = async (url) => { const res = await fetch(API + url); return res.json(); };
+        const apiDelete = async (url) => { const res = await fetch(API + url, { method: 'DELETE' }); return res.json(); };
+
+        const goToStage = (i) => { currentStageIndex.value = i; showRevision.value = false; };
+
+        // ========== File Upload ==========
+        const handleFileUpload = async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            uploadState.uploading = true;
+            uploadState.status = '';
+            uploadState.error = '';
+            uploadState.filename = file.name;
             try {
-                const response = await fetch(`${API_BASE_URL}/report/generate?session_id=${currentSessionId}`, {
-                    method: 'POST'
-                });
-
-                const data = await response.json();
-
+                const formData = new FormData();
+                formData.append('file', file);
+                const res = await fetch(`${API}/upload?session_id=${encodeURIComponent(sessionId.value)}`, { method: 'POST', body: formData });
+                const data = await res.json();
                 if (data.success) {
-                    showStatus('报告已生成', 'success');
-                    // 显示下载链接
-                    showPanel('panel-result');
-                    loadResults();
-                }
-            } catch (error) {
-                showStatus('生成报告失败: ' + error.message, 'error');
-            }
-        }
-
-        // 生成全流程脚本
-        async function generatePipeline() {
-            if (!currentSessionId) {
-                showStatus('请先启动工作流', 'error');
-                return;
-            }
-
-            try {
-                const response = await fetch(`${API_BASE_URL}/pipeline/generate?session_id=${currentSessionId}`, {
-                    method: 'POST'
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    showStatus('全流程脚本已生成', 'success');
-                    showPanel('panel-result');
-                    loadResults();
-                }
-            } catch (error) {
-                showStatus('生成脚本失败: ' + error.message, 'error');
-            }
-        }
-
-        // 发送消息
-        async function sendMessage() {
-            const input = document.getElementById('chat-input');
-            const message = input.value.trim();
-
-            if (!message) return;
-
-            // 添加用户消息
-            addChatMessage(message, 'user');
-            input.value = '';
-
-            if (!currentSessionId) {
-                addChatMessage('请先启动工作流', 'assistant');
-                return;
-            }
-
-            try {
-                const response = await fetch(`${API_BASE_URL}/chat`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        session_id: currentSessionId,
-                        message: message
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    addChatMessage(data.response, 'assistant');
+                    uploadState.status = 'success';
+                    uploadState.fileSize = data.file_size;
+                    toast('文件上传成功: ' + data.filename, 'success');
                 } else {
-                    addChatMessage('请求失败', 'assistant');
+                    uploadState.status = 'error';
+                    uploadState.error = data.error || data.detail || '上传失败';
                 }
-            } catch (error) {
-                addChatMessage('请求失败: ' + error.message, 'assistant');
+            } catch (e) {
+                uploadState.status = 'error';
+                uploadState.error = e.message;
             }
-        }
+            uploadState.uploading = false;
+        };
 
-        // 添加聊天消息
-        function addChatMessage(message, role) {
-            const messagesDiv = document.getElementById('chat-messages');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `chat-message ${role}`;
-            messageDiv.textContent = message;
-            messagesDiv.appendChild(messageDiv);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        }
+        // ========== Workflow ==========
+        const startWorkflow = async () => {
+            if (!uploadState.status && !config.dataPath) { toast('请先上传数据文件或输入数据路径', 'error'); return; }
+            if (!config.targetColumn) { toast('请填写目标列名', 'error'); return; }
+            loading.start = true;
+            try {
+                const body = {
+                    session_id: sessionId.value,
+                    target_column: config.targetColumn,
+                    task_type: config.taskType,
+                    model: config.model,
+                    task_description: config.taskDescription,
+                };
+                if (config.dataPath) body.data_path = config.dataPath;
+                const data = await apiPost('/workflow/start', body);
+                if (data.success) {
+                    stageStatus['data_upload'] = 'completed';
+                    stageResults['data_upload'] = data;
+                    currentStageIndex.value = 1;
+                    toast('工作流启动成功', 'success');
+                } else {
+                    toast(data.message || data.detail || '启动失败', 'error');
+                }
+            } catch (e) { toast('请求失败: ' + e.message, 'error'); }
+            loading.start = false;
+        };
 
-        // 监听回车键
-        document.getElementById('chat-input')?.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                sendMessage();
+        const runStage = async (stage) => {
+            loading.stage = true;
+            runningStage.value = stage;
+            showRevision.value = false;
+
+            // 流式输出支持的阶段
+            if (STREAMABLE_STAGES.includes(stage)) {
+                stageStreaming[stage] = true;
+                stageStreamContent.value = '';
+                try {
+                    const url = `${API}/workflow/${sessionId.value}/stage/${stage}/stream`;
+                    const evtSource = new EventSource(url);
+                    evtSource.onmessage = (event) => {
+                        try {
+                            const d = JSON.parse(event.data);
+                            if (d.type === 'content') {
+                                stageStreamContent.value += d.content;
+                            } else if (d.type === 'progress') {
+                                // 可选：显示进度提示
+                            } else if (d.type === 'done') {
+                                evtSource.close();
+                                const result = JSON.parse(d.content);
+                                stageData[stage] = result;
+                                currentConfirmationId.value = result.confirmation_id || '';
+                                currentModifiableAspects.value = result.modifiable_aspects || [];
+                                revisionRound.value = 0;
+                                if (!result.requires_confirmation) {
+                                    stageStatus[stage] = 'completed';
+                                }
+                                stageStreaming[stage] = false;
+                                stageStreamContent.value = '';
+                                loading.stage = false; runningStage.value = '';
+                            } else if (d.type === 'error') {
+                                evtSource.close();
+                                toast(d.content || '阶段运行失败', 'error');
+                                stageStatus[stage] = 'error';
+                                stageStreaming[stage] = false;
+                                loading.stage = false; runningStage.value = '';
+                            }
+                        } catch {}
+                    };
+                    evtSource.onerror = () => {
+                        evtSource.close();
+                        if (stageStreaming[stage]) {
+                            // 降级到 POST
+                            stageStreaming[stage] = false;
+                            stageStreamContent.value = '';
+                            runStageFallback(stage);
+                        }
+                    };
+                } catch (e) {
+                    stageStreaming[stage] = false;
+                    runStageFallback(stage);
+                }
+                return;
             }
+
+            // 非流式阶段走原逻辑
+            await runStageFallback(stage);
+        };
+
+        const runStageFallback = async (stage) => {
+            loading.stage = true;
+            runningStage.value = stage;
+            try {
+                const data = await apiPost(`/workflow/${sessionId.value}/stage/${stage}/run`);
+                if (data.success) {
+                    stageData[stage] = data;
+                    currentConfirmationId.value = data.confirmation_id || '';
+                    currentModifiableAspects.value = data.modifiable_aspects || [];
+                    revisionRound.value = 0;
+                    // If no confirmation required (e.g. data_exploration), mark completed
+                    if (!data.requires_confirmation) {
+                        stageStatus[stage] = 'completed';
+                    }
+                } else {
+                    toast(data.error || data.detail || '阶段运行失败', 'error');
+                    stageStatus[stage] = 'error';
+                }
+            } catch (e) { toast('请求失败: ' + e.message, 'error'); stageStatus[stage] = 'error'; }
+            loading.stage = false; runningStage.value = '';
+        };
+
+        const submitConfirm = async (status) => {
+            const stage = stages[currentStageIndex.value].key;
+
+            // 对于确认执行的流式阶段，使用 SSE
+            if (status === 'confirmed' && STREAMABLE_STAGES.includes(stage)) {
+                loading.stage = true;
+                runningStage.value = stage;
+                confirmExecuting[stage] = true;
+                confirmStreaming[stage] = true;
+                confirmStreamContent.value = '';
+                stageGeneratedCode[stage] = '';
+                try {
+                    const params = new URLSearchParams({
+                        confirmation_id: currentConfirmationId.value,
+                        status: status,
+                    });
+                    const url = `${API}/confirmation/${sessionId.value}/submit/stream?${params}`;
+                    const evtSource = new EventSource(url);
+                    evtSource.onmessage = (event) => {
+                        try {
+                            const d = JSON.parse(event.data);
+                            if (d.type === 'content') {
+                                confirmStreamContent.value += d.content;
+                            } else if (d.type === 'progress') {
+                                confirmStreamContent.value += '\n\n**' + d.content + '**\n\n';
+                            } else if (d.type === 'code_generated') {
+                                stageGeneratedCode[stage] = d.content;
+                            } else if (d.type === 'done') {
+                                evtSource.close();
+                                const result = JSON.parse(d.content);
+                                if (result.success) {
+                                    stageStatus[stage] = 'completed';
+                                    stageResults[stage] = result.execution;
+                                    if (result.execution && result.execution.generated_code) {
+                                        stageGeneratedCode[stage] = result.execution.generated_code;
+                                    }
+                                    // 合并评估结果到 stageData
+                                    if (result.execution && result.execution.evaluation) {
+                                        stageData[stage] = { ...stageData[stage], evaluation: result.execution.evaluation };
+                                    }
+                                    showRevision.value = false;
+                                    toast('已确认执行', 'success');
+                                    if (currentStageIndex.value < stages.length - 1) {
+                                        currentStageIndex.value++;
+                                    }
+                                } else {
+                                    toast(result.error || '执行失败', 'error');
+                                }
+                                confirmStreaming[stage] = false;
+                                confirmExecuting[stage] = false;
+                                confirmStreamContent.value = '';
+                                loading.stage = false; runningStage.value = '';
+                            } else if (d.type === 'error') {
+                                evtSource.close();
+                                toast(d.content || '执行失败', 'error');
+                                confirmStreaming[stage] = false;
+                                confirmExecuting[stage] = false;
+                                loading.stage = false; runningStage.value = '';
+                            }
+                        } catch {}
+                    };
+                    evtSource.onerror = () => {
+                        evtSource.close();
+                        if (confirmStreaming[stage]) {
+                            confirmStreaming[stage] = false;
+                            confirmStreamContent.value = '';
+                            // 降级到 POST
+                            submitConfirmFallback(status);
+                        }
+                    };
+                } catch (e) {
+                    confirmStreaming[stage] = false;
+                    submitConfirmFallback(status);
+                }
+                return;
+            }
+
+            await submitConfirmFallback(status);
+        };
+
+        const submitConfirmFallback = async (status) => {
+            try {
+                const data = await apiPost('/confirmation/submit', {
+                    session_id: sessionId.value,
+                    confirmation_id: currentConfirmationId.value,
+                    status: status,
+                    modifications: null,
+                });
+                if (data.success) {
+                    const stage = stages[currentStageIndex.value].key;
+                    stageStatus[stage] = 'completed';
+                    showRevision.value = false;
+                    // 提取生成的代码
+                    if (data.execution && data.execution.generated_code) {
+                        stageGeneratedCode[stage] = data.execution.generated_code;
+                    }
+                    // 合并评估结果到 stageData
+                    if (data.execution && data.execution.evaluation) {
+                        stageData[stage] = { ...stageData[stage], evaluation: data.execution.evaluation };
+                    }
+                    toast(status === 'confirmed' ? '已确认执行' : status === 'skipped' ? '已跳过' : '已拒绝', 'success');
+
+                    // Handle next_confirmation (e.g. feature_evaluation)
+                    if (data.next_confirmation && data.next_confirmation.requires_confirmation) {
+                        currentConfirmationId.value = data.next_confirmation.confirmation_id;
+                        // Show feature evaluation proposal inline, don't auto-advance
+                        if (data.next_confirmation.stage === 'feature_evaluation') {
+                            stageData.feature_engineering = {
+                                ...stageData.feature_engineering,
+                                feature_evaluation_proposal: data.next_confirmation.proposal,
+                                feature_evaluation_pending: true,
+                            };
+                            stageStatus.feature_engineering = 'completed';
+                            toast('特征工程已完成，可选择进行特征评估', 'info');
+                            // Don't advance — stay on feature engineering page
+                        } else {
+                            toast('有后续确认: ' + (data.next_confirmation.stage || ''), 'info');
+                            if (currentStageIndex.value < stages.length - 1) {
+                                currentStageIndex.value++;
+                            }
+                        }
+                    } else {
+                        // Auto advance to next stage
+                        if (currentStageIndex.value < stages.length - 1) {
+                            currentStageIndex.value++;
+                        }
+                    }
+                } else {
+                    toast(data.error || data.detail || '提交失败', 'error');
+                }
+            } catch (e) { toast('请求失败: ' + e.message, 'error'); }
+            const stageKey = stages[currentStageIndex.value].key;
+            confirmExecuting[stageKey] = false;
+            loading.stage = false; runningStage.value = '';
+        };
+
+        const submitFeatureEvaluation = async (status) => {
+            loading.stage = true;
+            runningStage.value = 'feature_evaluation';
+            try {
+                const data = await apiPost('/confirmation/submit', {
+                    session_id: sessionId.value,
+                    confirmation_id: currentConfirmationId.value,
+                    status: status,
+                    modifications: null,
+                });
+                if (data.success) {
+                    // Clear pending state
+                    stageData.feature_engineering = {
+                        ...stageData.feature_engineering,
+                        feature_evaluation_pending: false,
+                    };
+                    if (status === 'confirmed' && data.execution && data.execution.success) {
+                        // Load the feature metrics report from assets
+                        try {
+                            const reportRes = await fetch(`${API}/assets/${sessionId.value}/features/feature_metrics_report.md`);
+                            if (reportRes.ok) {
+                                const reportText = await reportRes.text();
+                                stageData.feature_engineering = {
+                                    ...stageData.feature_engineering,
+                                    feature_evaluation_report: reportText,
+                                };
+                            }
+                        } catch (e) { /* ignore fetch error */ }
+                        toast('特征评估已完成', 'success');
+                    } else if (status === 'skipped') {
+                        toast('已跳过特征评估', 'info');
+                    } else {
+                        toast(data.error || '特征评估执行失败', 'error');
+                    }
+                    // Advance to next stage
+                    if (currentStageIndex.value < stages.length - 1) {
+                        currentStageIndex.value++;
+                    }
+                } else {
+                    toast(data.error || data.detail || '提交失败', 'error');
+                }
+            } catch (e) { toast('请求失败: ' + e.message, 'error'); }
+            loading.stage = false; runningStage.value = '';
+        };
+
+        const submitRevisionText = async (text) => {
+            const stage = stages[currentStageIndex.value].key;
+            loading.stage = true;
+            runningStage.value = stage;
+            revising[stage] = true;
+            try {
+                const data = await apiPost('/confirmation/revise', {
+                    session_id: sessionId.value,
+                    confirmation_id: currentConfirmationId.value,
+                    modifications: text,
+                });
+                if (data.success) {
+                    currentConfirmationId.value = data.confirmation_id;
+                    currentModifiableAspects.value = data.modifiable_aspects || [];
+                    revisionRound.value = data.revision_round || 0;
+                    if (stageData[stage]) {
+                        stageData[stage] = { ...stageData[stage], proposal: data.proposal, requires_confirmation: data.requires_confirmation, confirmation_id: data.confirmation_id };
+                    }
+                    showRevision.value = false;
+                    toast('方案已修订 (第 ' + revisionRound.value + ' 轮)', 'success');
+                } else {
+                    toast(data.error || data.detail || '修订失败', 'error');
+                }
+            } catch (e) { toast('修订请求失败: ' + e.message, 'error'); }
+            revising[stage] = false;
+            loading.stage = false; runningStage.value = '';
+        };
+
+        // ========== Chat (SSE) ==========
+        const sendChat = async () => {
+            const msg = chatInput.value.trim();
+            if (!msg || !sessionId.value) return;
+            chatMessages.value.push({ role: 'user', content: msg });
+            chatInput.value = '';
+            chatStreaming.value = true;
+            chatStreamContent.value = '';
+            await nextTick();
+            if (chatBox.value) chatBox.value.scrollTop = chatBox.value.scrollHeight;
+
+            try {
+                const url = `${API}/chat/stream?session_id=${encodeURIComponent(sessionId.value)}&message=${encodeURIComponent(msg)}&model=${encodeURIComponent(config.model)}`;
+                const evtSource = new EventSource(url);
+                evtSource.onmessage = (event) => {
+                    try {
+                        const d = JSON.parse(event.data);
+                        if (d.type === 'content') {
+                            chatStreamContent.value += d.content;
+                        } else if (d.type === 'done' || d.type === 'error') {
+                            evtSource.close();
+                            chatMessages.value.push({ role: 'assistant', content: chatStreamContent.value || d.content || '' });
+                            chatStreaming.value = false;
+                            chatStreamContent.value = '';
+                        }
+                    } catch {}
+                    nextTick(() => { if (chatBox.value) chatBox.value.scrollTop = chatBox.value.scrollHeight; });
+                };
+                evtSource.onerror = () => {
+                    evtSource.close();
+                    if (chatStreaming.value) {
+                        // Fallback to sync
+                        chatStreaming.value = false;
+                        fallbackChat(msg);
+                    }
+                };
+            } catch (e) {
+                chatStreaming.value = false;
+                fallbackChat(msg);
+            }
+        };
+
+        const fallbackChat = async (msg) => {
+            try {
+                const data = await apiPost('/chat', { session_id: sessionId.value, message: msg, model: config.model });
+                chatMessages.value.push({ role: 'assistant', content: data.response || '请求失败' });
+            } catch (e) {
+                chatMessages.value.push({ role: 'assistant', content: '请求失败: ' + e.message });
+            }
+        };
+
+        // ========== Sessions ==========
+        const loadSessions = async () => {
+            try {
+                const data = await apiGet('/sessions');
+                sessions.value = data.sessions || [];
+            } catch (e) { toast('加载会话失败', 'error'); }
+        };
+
+        const resumeSession = async (sid) => {
+            sessionId.value = sid;
+            activeTab.value = 'workflow';
+            try {
+                const data = await apiGet(`/sessions/${sid}/restore`);
+                if (!data.success) {
+                    toast('恢复会话失败: ' + (data.detail || ''), 'error');
+                    return;
+                }
+                // 恢复 config
+                if (data.context) {
+                    config.targetColumn = data.context.target_column || '';
+                    config.taskType = data.context.task_type || 'classification';
+                    config.model = data.context.model || 'claude-opus-4-6';
+                    config.dataPath = data.context.data_path || '';
+                    config.taskDescription = data.context.task_description || '';
+                }
+                // 恢复各阶段数据
+                if (data.stage_data) {
+                    for (const [key, val] of Object.entries(data.stage_data)) {
+                        stageData[key] = val;
+                    }
+                }
+                // 恢复阶段状态
+                if (data.stage_status) {
+                    for (const [key, val] of Object.entries(data.stage_status)) {
+                        stageStatus[key] = val;
+                    }
+                }
+                // 恢复生成的代码
+                if (data.generated_code) {
+                    for (const [key, val] of Object.entries(data.generated_code)) {
+                        stageGeneratedCode[key] = val;
+                    }
+                }
+                // 恢复资产列表
+                if (data.assets) {
+                    const raw = data.assets;
+                    if (Array.isArray(raw)) {
+                        assets.value = raw.map(a => typeof a === 'string' ? a : (a.url || a.name || JSON.stringify(a)));
+                    } else {
+                        const flat = [];
+                        for (const [type, items] of Object.entries(raw)) {
+                            if (Array.isArray(items)) items.forEach(it => flat.push(type + '/' + (it.name || it)));
+                            else flat.push(type);
+                        }
+                        assets.value = flat;
+                    }
+                }
+                // 恢复当前阶段索引
+                if (typeof data.current_stage_index === 'number') {
+                    currentStageIndex.value = data.current_stage_index;
+                }
+                // 恢复待处理的确认
+                if (data.pending_confirmation) {
+                    currentConfirmationId.value = data.pending_confirmation.confirmation_id;
+                }
+                toast('会话已恢复: ' + sid, 'success');
+            } catch (e) {
+                toast('恢复会话失败: ' + e.message, 'error');
+            }
+        };
+
+        const deleteSession = async (sid) => {
+            if (!confirm('确定要删除会话 ' + sid + ' 吗？')) return;
+            try {
+                await apiDelete('/sessions/' + sid + '?confirm=true');
+                toast('会话已删除', 'success');
+                loadSessions();
+            } catch (e) { toast('删除失败', 'error'); }
+        };
+
+        // ========== Predict ==========
+        const handlePredictFileSelect = (event) => {
+            const file = event.target.files[0];
+            if (file) predict.uploadedFile = file;
+        };
+        const handlePredictFileDrop = (event) => {
+            const file = event.dataTransfer.files[0];
+            if (file) predict.uploadedFile = file;
+        };
+
+        const runPredict = async () => {
+            predict.result = null;
+            predict.error = '';
+            loading.predict = true;
+            const sid = predict.sessionId || sessionId.value;
+            try {
+                let data;
+                if (predict.inputMode === 'upload' && predict.uploadedFile) {
+                    // 文件上传模式
+                    const formData = new FormData();
+                    formData.append('file', predict.uploadedFile);
+                    let url = `${API}/predict/upload?session_id=${encodeURIComponent(sid)}`;
+                    if (predict.outputDir) url += `&output_dir=${encodeURIComponent(predict.outputDir)}`;
+                    const res = await fetch(url, { method: 'POST', body: formData });
+                    data = await res.json();
+                } else {
+                    // 路径模式
+                    let url = `/predict?session_id=${encodeURIComponent(sid)}&data_path=${encodeURIComponent(predict.dataPath)}`;
+                    if (predict.outputDir) url += `&output_dir=${encodeURIComponent(predict.outputDir)}`;
+                    data = await apiPost(url);
+                }
+                if (data.success) {
+                    predict.result = data;
+                    toast('预测完成', 'success');
+                } else {
+                    predict.error = data.error || data.detail?.error || data.detail || '预测失败';
+                }
+            } catch (e) { predict.error = e.message; }
+            loading.predict = false;
+        };
+
+        // ========== Logs ==========
+        const loadLogs = async () => {
+            try {
+                const data = await apiGet(`/logs/${logs.sessionId}/llm?limit=100`);
+                logs.entries = data.logs || [];
+                if (logs.entries.length === 0) toast('未找到日志', 'info');
+            } catch (e) { toast('加载日志失败', 'error'); }
+        };
+
+        // ========== Assets ==========
+        const loadAssets = async () => {
+            try {
+                const data = await apiGet(`/assets/${sessionId.value}/list`);
+                const raw = data.assets || [];
+                // Flatten if it's an object of arrays
+                if (Array.isArray(raw)) {
+                    assets.value = raw.map(a => typeof a === 'string' ? a : (a.url || a.name || JSON.stringify(a)));
+                } else {
+                    const flat = [];
+                    for (const [type, items] of Object.entries(raw)) {
+                        if (Array.isArray(items)) items.forEach(it => flat.push(type + '/' + (it.name || it)));
+                        else flat.push(type);
+                    }
+                    assets.value = flat;
+                }
+            } catch {}
+        };
+
+        // ========== Report / Pipeline ==========
+        const generateReport = async () => {
+            try {
+                const data = await apiPost(`/report/generate?session_id=${sessionId.value}`);
+                if (data.success) { toast('报告已生成', 'success'); loadAssets(); }
+                else toast(data.error || '生成失败', 'error');
+            } catch (e) { toast('生成报告失败', 'error'); }
+        };
+
+        const generatePipeline = async () => {
+            try {
+                const data = await apiPost(`/pipeline/generate?session_id=${sessionId.value}`);
+                if (data.success) { toast('Pipeline 脚本已生成', 'success'); loadAssets(); }
+                else toast(data.error || '生成失败', 'error');
+            } catch (e) { toast('生成失败', 'error'); }
+        };
+
+        // ========== Watch tab changes ==========
+        watch(activeTab, (tab) => {
+            if (tab === 'sessions') loadSessions();
+            if (tab === 'logs') { logs.sessionId = sessionId.value; if (logs.sessionId) loadLogs(); }
+            if (tab === 'predict') predict.sessionId = sessionId.value;
         });
 
-        // 初始化
-        document.addEventListener('DOMContentLoaded', function() {
-            // 生成随机会话ID
-            document.getElementById('sessionId').value = 'session_' + Date.now();
-        });
-    </script>
+        // 预加载会话列表
+        onMounted(() => { loadSessions(); });
+
+        return {
+            API, tabs, activeTab,
+            stages, currentStageIndex, stageStatus, stageData, stageResults,
+            sessionId, config, loading, runningStage, uploadState,
+            currentConfirmationId, currentModifiableAspects, showRevision, revisionRound,
+            stageStreamContent, stageStreaming,
+            confirmStreaming, confirmExecuting, revising, confirmStreamContent, stageGeneratedCode, codePreviewExpanded,
+            highlightCode, toggleCodePreview,
+            toasts, toast,
+            chatMessages, chatInput, chatStreaming, chatStreamContent, chatBox,
+            sessions, sortedSessions, sessionSort, predict, logs, assets,
+            renderMd, formatTime, formatFileSize, goToStage,
+            startWorkflow, runStage, submitConfirm, submitRevisionText, submitFeatureEvaluation,
+            handleFileUpload, handlePredictFileSelect, handlePredictFileDrop,
+            sendChat, loadSessions, resumeSession, deleteSession,
+            runPredict, loadLogs, loadAssets,
+            generateReport, generatePipeline,
+        };
+    }
+});
+
+app.mount('#app');
+</script>
 </body>
 </html>

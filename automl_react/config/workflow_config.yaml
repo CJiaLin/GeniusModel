@@ -5,7 +5,7 @@
 react_agent:
   max_iterations: 10
   verbose: false
-  timeout: 300
+  timeout: 600
 
 # 工作流阶段配置
 stages:
@@ -40,17 +40,11 @@ stages:
   
   model_training:
     required: true
-    description: "模型训练阶段"
+    description: "模型训练与评估阶段"
     skills:
       - "afrexai-ml-engineering-1.0.0"
       - "ml-model-eval-benchmark-0.1.0"
     confirmation_required: true
-  
-  model_evaluation:
-    required: true
-    description: "模型评估阶段"
-    skills:
-      - "ml-model-eval-benchmark-0.1.0"
 
 # 确认点配置
 confirmation:

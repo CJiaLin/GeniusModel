@@ -45,6 +45,8 @@ class ModelTrainingAgent(ReActAgent):
         self.model_plan: Optional[str] = None
         self.model_code: Optional[str] = None
         self.model_result: Optional[Dict[str, Any]] = None
+        self.evaluation_plan: Optional[str] = None
+        self.evaluation_result: Optional[Dict[str, Any]] = None
         self.config_loader = get_config_loader()
 
     def _register_default_tools(self):
@@ -412,6 +414,139 @@ class ModelTrainingAgent(ReActAgent):
         with open(artifact_paths["training_summary_path"], "w", encoding="utf-8") as file:
             json.dump(summary_payload, file, ensure_ascii=False, indent=2)
 
+        # 保存函数式代码文件供 pipeline 使用
+        fallback_code = f'''import os
+import json
+import pickle
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+
+
+def train_model(train_path, valid_path, test_path, model_dir, target_column, summary_path=None):
+    """训练模型（确定性兜底：RandomForest 基线）。"""
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = os.path.join(model_dir, "trained_model.pkl")
+    if summary_path is None:
+        summary_path = os.path.join(model_dir, "training_summary.json")
+
+    train_df = pd.read_csv(train_path)
+    valid_df = pd.read_csv(valid_path) if valid_path and os.path.exists(valid_path) else None
+    test_df = pd.read_csv(test_path) if test_path and os.path.exists(test_path) else None
+
+    train_df = train_df.dropna(subset=[target_column])
+    if valid_df is not None:
+        valid_df = valid_df.dropna(subset=[target_column])
+    if test_df is not None:
+        test_df = test_df.dropna(subset=[target_column])
+
+    x_train = train_df.drop(columns=[target_column])
+    id_cols = [c for c in x_train.columns if c.lower() in ("id", "index", "row_id")]
+    if id_cols:
+        x_train = x_train.drop(columns=id_cols)
+
+    eval_df = valid_df if valid_df is not None and not valid_df.empty else test_df
+    x_eval = eval_df.drop(columns=[target_column])
+    if id_cols:
+        x_eval = x_eval.drop(columns=[c for c in id_cols if c in x_eval.columns])
+    y_train = train_df[target_column]
+    y_eval = eval_df[target_column]
+
+    numeric_features = list(x_train.select_dtypes(include=["number", "bool"]).columns)
+    categorical_features = [c for c in x_train.columns if c not in numeric_features]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", Pipeline([("imputer", SimpleImputer(strategy="median"))]), numeric_features),
+            ("cat", Pipeline([("imputer", SimpleImputer(strategy="most_frequent")), ("onehot", OneHotEncoder(handle_unknown="ignore"))]), categorical_features),
+        ],
+        remainder="drop",
+    )
+
+    task_type = "{task_type}"
+    if "regression" in task_type:
+        estimator = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    else:
+        estimator = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, class_weight="balanced")
+
+    model = Pipeline([("preprocessor", preprocessor), ("model", estimator)])
+    model.fit(x_train, y_train)
+    predictions = model.predict(x_eval)
+
+    if "regression" in task_type:
+        metrics = {{
+            "r2": float(r2_score(y_eval, predictions)),
+            "mae": float(mean_absolute_error(y_eval, predictions)),
+            "rmse": float(mean_squared_error(y_eval, predictions) ** 0.5),
+        }}
+    else:
+        metrics = {{
+            "accuracy": float(accuracy_score(y_eval, predictions)),
+            "f1_weighted": float(f1_score(y_eval, predictions, average="weighted")),
+        }}
+
+    selected_feature_names = list(x_train.columns)
+    artifact = {{
+        "model": model,
+        "selected_feature_names": selected_feature_names,
+        "target_transform": None,
+        "preprocessor": None,
+    }}
+    with open(model_path, "wb") as f:
+        pickle.dump(artifact, f)
+
+    summary = {{
+        "metrics": metrics,
+        "selected_feature_names": selected_feature_names,
+        "target_column": target_column,
+        "task_type": task_type,
+        "target_transform": None,
+        "model_path": model_path,
+    }}
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    print(f"模型训练完成，指标: {{metrics}}")
+
+    return {{
+        "metrics": metrics,
+        "selected_feature_names": selected_feature_names,
+        "model_path": model_path,
+        "train_split_path": train_path,
+        "valid_split_path": valid_path,
+        "test_split_path": test_path,
+        "training_summary_path": summary_path,
+    }}
+
+
+if __name__ == "__main__":
+    result = train_model(
+        train_path="{train_split_path}",
+        valid_path="{valid_split_path}",
+        test_path="{test_split_path}",
+        model_dir=os.path.dirname("{artifact_paths["model_path"]}"),
+        target_column="{target_column}",
+        summary_path="{artifact_paths["training_summary_path"]}",
+    )
+    metrics = result["metrics"]
+    selected_feature_names = result["selected_feature_names"]
+    model_path = result["model_path"]
+    train_split_path = result["train_split_path"]
+    valid_split_path = result["valid_split_path"]
+    test_split_path = result["test_split_path"]
+    training_summary_path = result["training_summary_path"]
+'''
+        self.asset_manager.save_code(
+            code=fallback_code,
+            filename="model_training.py",
+            metadata={"stage": "model_training", "fallback": True}
+        )
+
         return True, f"确定性基线训练完成，使用 {evaluation_split_name} 集做指标选择，模型已保存到 {output_path}"
 
     def get_system_prompt(self) -> str:
@@ -731,6 +866,8 @@ class ModelTrainingAgent(ReActAgent):
 
         # 使用 CodeActAgent 生成并执行代码
         codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300, session_id=self.session_id)
+        if self._stream_callback:
+            codeact.set_stream_callback(self._stream_callback)
 
         context = {
             "data_path": self.data_path,
@@ -828,6 +965,8 @@ class ModelTrainingAgent(ReActAgent):
         }
 
         codeact = CodeActAgent(llm=self.llm, max_iterations=1, timeout=300, session_id=self.session_id)
+        if self._stream_callback:
+            codeact.set_stream_callback(self._stream_callback)
         exec_result = codeact._execute_code(model_code, context)
         if exec_result.get("success"):
             self._normalize_training_artifacts()
@@ -846,6 +985,78 @@ class ModelTrainingAgent(ReActAgent):
         )
 
         return result_info
+
+    # ------------------------------------------------------------------
+    # 评估方法（从 ModelEvaluationAgent 融合）
+    # ------------------------------------------------------------------
+
+    def generate_evaluation_plan(self) -> str:
+        """基于训练结果生成评估方案。"""
+        training_summary = {}
+        training_summary_json = self.asset_manager.read_asset("models", "training_summary.json")
+        if training_summary_json:
+            try:
+                training_summary = json.loads(training_summary_json)
+            except Exception:
+                pass
+
+        model_result = self.model_result or {}
+        model_path = model_result.get("model_path", "未知")
+        test_split_path = model_result.get("test_split_path", "未知")
+        metrics = model_result.get("metrics", {})
+        selected_feature_names = model_result.get("selected_feature_names", [])
+
+        task_context = getattr(self, "task_context", "")
+
+        current_evaluation_context = f"""
+## 当前评估事实
+
+- **模型文件**: {model_path}
+- **测试集文件**: {test_split_path}
+- **目标列**: {self.target_column}
+- **任务类型**: {self.task_type}
+- **训练阶段记录的最佳模型**: {training_summary.get('best_model_name', '未知')}
+- **训练阶段记录的目标变换**: {training_summary.get('target_transform', '未记录')}
+- **训练阶段回收指标**: {json.dumps(metrics, ensure_ascii=False)}
+- **训练阶段回收入模特征数**: {len(selected_feature_names)}
+
+重要：评估阶段必须基于已保存的模型文件和测试集文件，验证训练摘要中的指标是否可复现，并补充形成标准化评估结论。
+"""
+        prompt_template = self.config_loader.get_prompt("model_training", "evaluation_plan_generation")
+        user_input = prompt_template.format(
+            task_context=task_context,
+            current_evaluation_context=current_evaluation_context,
+        )
+
+        result = self.run(user_input, stage="model_evaluation_plan")
+        self.evaluation_plan = result.get("answer", "")
+        return self.evaluation_plan
+
+    def execute_evaluation(self) -> Dict[str, Any]:
+        """执行模型评估，生成评估代码并运行。"""
+        from ..evaluation import ModelEvaluator
+
+        model_result = self.model_result or {}
+        model_path = model_result.get("model_path")
+        test_split_path = model_result.get("test_split_path")
+
+        if not model_path:
+            return {"success": False, "error": "缺少 model_path，无法评估"}
+        if not test_split_path:
+            return {"success": False, "error": "缺少 test_split_path，无法评估"}
+
+        evaluator = ModelEvaluator(session_id=self.session_id)
+        result = evaluator.evaluate_model(
+            model_path=model_path,
+            data_path=test_split_path,
+            target_column=self.target_column,
+            task_type=self.task_type,
+        )
+
+        result["stage"] = "model_evaluation"
+        result["test_split_path"] = test_split_path
+        self.evaluation_result = result
+        return result
 
     def full_model_training_workflow(
         self,

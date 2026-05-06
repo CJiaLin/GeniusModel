@@ -20,6 +20,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from ..config import get_config_loader
 from ..logger import get_llm_logger
+from ..core.stream_callback import StreamCallbackFn, StreamEvent, StreamEventType
 
 
 @dataclass
@@ -50,6 +51,7 @@ class CodeActAgent:
         self.session_id = session_id or "default"
         self.config_loader = get_config_loader()
         self.llm_logger = get_llm_logger(session_id=self.session_id)
+        self._stream_callback: StreamCallbackFn = None
         # 子进程执行模式（可通过环境变量 CODEACT_USE_SUBPROCESS=0 关闭）
         self.use_subprocess = use_subprocess and os.environ.get("CODEACT_USE_SUBPROCESS", "1") != "0"
         if self.use_subprocess:
@@ -65,7 +67,11 @@ class CodeActAgent:
                 memory_limit_mb=exec_config.get("memory_limit_mb", 2048),
                 cpu_time_limit=exec_config.get("cpu_time_limit", timeout),
             )
-    
+
+    def set_stream_callback(self, callback: StreamCallbackFn):
+        """设置流式输出回调函数"""
+        self._stream_callback = callback
+
     def generate_and_execute(
         self,
         task_prompt: str,
@@ -100,22 +106,24 @@ class CodeActAgent:
         
         for iteration in range(self.max_iterations):
             print(f"\n[CodeAct] 迭代 {iteration + 1}/{self.max_iterations}")
-            
+            if self._stream_callback:
+                self._stream_callback(StreamEvent(StreamEventType.PROGRESS, f"代码生成迭代 {iteration + 1}/{self.max_iterations}"))
+
             # 构建提示词
             if iteration == 0:
                 prompt = self._build_initial_messages(task_prompt)
             else:
                 print(last_error)
                 prompt = self._build_retry_messages(task_prompt, current_code, last_error)
-            
+
             # 生成代码
             print(f"[CodeAct] 生成代码...")
             code_result = self._generate_code(prompt, stage=stage, iteration=iteration + 1)
-            
+
             if not code_result["success"]:
                 last_error = code_result.get("error", "代码生成失败")
                 continue
-            
+
             current_code = code_result["code"]
 
             # L1: 代码完整性校验（语法/结构）
@@ -124,9 +132,11 @@ class CodeActAgent:
                 if not syntax_ok:
                     last_error = syntax_msg
                     continue
-            
+
             # 执行代码
             print(f"[CodeAct] 执行代码...")
+            if self._stream_callback:
+                self._stream_callback(StreamEvent(StreamEventType.PROGRESS, "正在执行代码..."))
             exec_result = self._execute_code(current_code, context, required_outputs)
             
             if exec_result["success"]:
@@ -193,7 +203,7 @@ class CodeActAgent:
         )
 
     def _validate_code_syntax(self, code: str, stage: str = "") -> Tuple[bool, str]:
-        """校验代码是否可解析，并检查禁止的代码格式模式。"""
+        """校验代码是否可解析，并检查函数封装格式。"""
         if not code or not code.strip():
             return False, "代码为空"
 
@@ -202,9 +212,8 @@ class CodeActAgent:
         except SyntaxError as e:
             return False, f"代码语法不完整: {e}"
 
-        # 格式约束检查
+        # R1: 禁止 globals().update()
         for node in ast.walk(tree):
-            # R1: 禁止 globals().update()
             if (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
                     and node.func.attr == 'update'
@@ -213,31 +222,39 @@ class CodeActAgent:
                     and node.func.value.func.id == 'globals'):
                 return False, "代码格式违规: 不要使用 globals().update()，直接赋值变量即可"
 
-        for node in tree.body:
-            # R2: 禁止 def main()
-            if (isinstance(node, ast.FunctionDef)
-                    and node.name == 'main'
-                    and len(node.args.args) == 0):
-                return False, "代码格式违规: 不要用 def main() 包装代码，请将代码直接写为顶层可执行语句"
-
-            # R3: 禁止 if __name__ == "__main__"
-            if isinstance(node, ast.If):
-                test = node.test
-                if (isinstance(test, ast.Compare)
-                        and isinstance(test.left, ast.Name) and test.left.id == '__name__'
-                        and any(isinstance(c, ast.Constant) and c.value == '__main__' for c in test.comparators)):
-                    return False, "代码格式违规: 不要写 if __name__ == '__main__' 块"
-
-            # R5: stage-specific 保留名检查
-            if isinstance(node, ast.FunctionDef):
-                if "cleaning" in stage and node.name == "clean_data":
-                    return False, "代码格式违规: 不要定义名为 clean_data 的函数（此名称由流水线框架保留）"
-                if "feature" in stage and node.name == "engineer_features":
-                    return False, "代码格式违规: 不要定义名为 engineer_features 的函数（此名称由流水线框架保留）"
-
         # R4: 禁止多行 import（括号换行）
         if re.search(r'from\s+\S+\s+import\s*\(', code):
             return False, "代码格式违规: import 语句必须写在单行，不要用括号换行（from X import a, b, c）"
+
+        # 正向校验：必须有指定的主函数定义和 if __name__ 块
+        expected_func = None
+        if "cleaning" in stage:
+            expected_func = "clean_data"
+        elif "feature" in stage:
+            expected_func = "engineer_features"
+        elif "training" in stage or "model_training" in stage:
+            expected_func = "train_model"
+
+        if expected_func:
+            func_names = [
+                node.name for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+            if expected_func not in func_names:
+                return False, f"代码格式违规: 必须定义主函数 {expected_func}()，将核心逻辑封装在函数内"
+
+            # 检查必须有 if __name__ == "__main__" 块
+            has_main_guard = False
+            for node in tree.body:
+                if isinstance(node, ast.If):
+                    test = node.test
+                    if (isinstance(test, ast.Compare)
+                            and isinstance(test.left, ast.Name) and test.left.id == '__name__'
+                            and any(isinstance(c, ast.Constant) and c.value == '__main__' for c in test.comparators)):
+                        has_main_guard = True
+                        break
+            if not has_main_guard:
+                return False, "代码格式违规: 必须包含 if __name__ == '__main__': 块，在其中解析参数并调用主函数"
 
         return True, "ok"
 
@@ -295,9 +312,9 @@ class CodeActAgent:
 
 代码格式约束（必须严格遵守）：
 - 不要使用 globals().update()
-- 不要用 def main(): 包装代码，直接写顶层可执行代码
-- 不要写 if __name__ == "__main__": 块
-- 所有 import 语句必须写在单行，不要用括号换行
+- 核心逻辑必须封装在指定的主函数中（如 clean_data、engineer_features、train_model）
+- 文件末尾必须有 if __name__ == "__main__": 块，在其中解析 sys.argv 参数并调用主函数
+- import 写在文件顶部，所有 import 语句必须写在单行，不要用括号换行
   （正确: from sklearn.metrics import accuracy_score, f1_score, r2_score）
   （错误: from sklearn.metrics import (\\n    accuracy_score,\\n    f1_score\\n)）"""
 
@@ -332,8 +349,8 @@ class CodeActAgent:
 
 代码格式约束（必须严格遵守）：
 - 不要使用 globals().update()
-- 不要用 def main(): 包装代码，直接写顶层可执行代码
-- 不要写 if __name__ == "__main__": 块
+- 核心逻辑必须封装在指定的主函数中（如 clean_data、engineer_features、train_model）
+- 文件末尾必须有 if __name__ == "__main__": 块，在其中解析 sys.argv 参数并调用主函数
 - 所有 import 语句必须写在单行，不要用括号换行"""
 
         human_content = f"""## 原始任务
@@ -381,26 +398,39 @@ class CodeActAgent:
     def _generate_code(self, prompt: Any, stage: str = "", iteration: int = 1) -> Dict[str, Any]:
         """生成代码"""
         try:
+            import time as _time
             full_response = ""
             start_time = datetime.now()
-            
+            _t0 = _time.time()
+            _ttft = None
+
             # 尝试流式输出
             try:
                 for chunk in self.llm.stream(prompt):
                     if chunk.content:
+                        if _ttft is None:
+                            _ttft = _time.time() - _t0
+                            print(f"\n[CodeAct] 首 token 响应时间 (TTFT): {_ttft:.2f}s")
                         content = chunk.content
                         full_response += content
                         print(content, end="", flush=True)
+                        if self._stream_callback:
+                            self._stream_callback(StreamEvent(StreamEventType.CONTENT, content))
             except Exception as e:
                 # 流式输出失败，回退到同步调用
                 print(f"\n[CodeAct] 流式输出失败，回退到同步调用: {e}")
                 try:
                     response = self.llm.invoke(prompt)
                     full_response = response.content if hasattr(response, 'content') else str(response)
+                    if self._stream_callback:
+                        self._stream_callback(StreamEvent(StreamEventType.CONTENT, full_response))
                 except Exception as e2:
                     return {"success": False, "error": str(e2)}
-            
-            print()  # 换行
+
+            _total = _time.time() - _t0
+            _gen_time = _total - (_ttft or 0)
+            print(f"\n[CodeAct] 耗时统计 — TTFT: {_ttft:.2f}s | 生成: {_gen_time:.2f}s | 总计: {_total:.2f}s"
+                  if _ttft else f"\n[CodeAct] 总耗时: {_total:.2f}s")
 
             llm_config = self.config_loader.get_llm_config()
             model_name = llm_config.get("model_name", "unknown")
@@ -423,10 +453,14 @@ class CodeActAgent:
             
             # 提取代码
             code = self._extract_code(full_response)
-            
+
             if not code.strip():
                 return {"success": False, "error": "无法提取有效代码"}
-            
+
+            # 将生成的代码发送给前端展示
+            if self._stream_callback:
+                self._stream_callback(StreamEvent(StreamEventType.CODE_GENERATED, code))
+
             return {"success": True, "code": code}
             
         except Exception as e:

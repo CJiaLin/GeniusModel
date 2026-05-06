@@ -172,12 +172,17 @@ class ReportGenerator:
                 plt, feature_importances, feature_names, charts_dir
             )
 
-        # 2. 指标对比图（训练 vs 测试）
-        train_metrics = training_summary.get("metrics", {})
-        eval_metrics = evaluation_result.get("metrics", {})
-        if train_metrics and eval_metrics:
+        # 2. 指标对比图（验证集 vs 测试集）
+        train_metrics_raw = training_summary.get("metrics", {})
+        if isinstance(train_metrics_raw.get("valid"), dict):
+            chart_valid_metrics = train_metrics_raw["valid"]
+            chart_test_metrics = train_metrics_raw.get("test", {})
+        else:
+            chart_valid_metrics = train_metrics_raw
+            chart_test_metrics = eval_metrics
+        if chart_valid_metrics and chart_test_metrics:
             chart_paths["metrics_comparison"] = self._chart_metrics_comparison(
-                plt, train_metrics, eval_metrics, charts_dir
+                plt, chart_valid_metrics, chart_test_metrics, charts_dir
             )
 
         return chart_paths
@@ -211,12 +216,12 @@ class ReportGenerator:
         except Exception:
             return ""
 
-    def _chart_metrics_comparison(self, plt, train_metrics, eval_metrics, charts_dir) -> str:
-        """生成训练 vs 测试指标对比图"""
+    def _chart_metrics_comparison(self, plt, valid_metrics, test_metrics, charts_dir) -> str:
+        """生成验证集 vs 测试集指标对比图"""
         try:
-            common_keys = [k for k in train_metrics if k in eval_metrics
-                          and isinstance(train_metrics[k], (int, float))
-                          and isinstance(eval_metrics[k], (int, float))]
+            common_keys = [k for k in valid_metrics if k in test_metrics
+                          and isinstance(valid_metrics[k], (int, float))
+                          and isinstance(test_metrics[k], (int, float))]
             if not common_keys:
                 return ""
 
@@ -224,11 +229,11 @@ class ReportGenerator:
             x = np.arange(len(common_keys))
             width = 0.35
             fig, ax = plt.subplots(figsize=(max(6, len(common_keys) * 1.5), 5))
-            ax.bar(x - width/2, [train_metrics[k] for k in common_keys], width, label="Train")
-            ax.bar(x + width/2, [eval_metrics[k] for k in common_keys], width, label="Test")
+            ax.bar(x - width/2, [valid_metrics[k] for k in common_keys], width, label="Valid")
+            ax.bar(x + width/2, [test_metrics[k] for k in common_keys], width, label="Test")
             ax.set_xticks(x)
             ax.set_xticklabels(common_keys, rotation=45, ha="right")
-            ax.set_title("Train vs Test Metrics")
+            ax.set_title("Valid vs Test Metrics")
             ax.legend()
             fig.tight_layout()
             path = str(charts_dir / "metrics_comparison.png")
@@ -387,15 +392,34 @@ class ReportGenerator:
             ])
             if training_summary:
                 lines.extend([
-                    f"- **最佳模型**: {training_summary.get('best_model', 'N/A')}",
+                    f"- **最佳模型**: {training_summary.get('best_model', 'N/A') or training_summary.get('best_model_name', 'N/A')}",
                     f"- **目标变换**: {training_summary.get('target_transform', 'None')}",
                     f"- **入模特征数**: {len(training_summary.get('selected_feature_names', []))}",
                 ])
-            if model_metrics:
-                lines.extend(["", "### 训练阶段指标", "", "| 指标 | 数值 |", "|------|------|"])
-                for k, v in model_metrics.items():
-                    val = f"{v:.4f}" if isinstance(v, float) else str(v)
-                    lines.append(f"| {k} | {val} |")
+
+            # 展示验证集和测试集指标对比表
+            valid_metrics = model_metrics.get("valid", {}) if isinstance(model_metrics.get("valid"), dict) else {}
+            test_metrics = model_metrics.get("test", {}) if isinstance(model_metrics.get("test"), dict) else {}
+
+            if valid_metrics or test_metrics:
+                all_keys = list(dict.fromkeys(list(valid_metrics.keys()) + list(test_metrics.keys())))
+                lines.extend(["", "### 训练阶段指标（验证集 vs 测试集）", "",
+                              "| 指标 | 验证集 | 测试集 |",
+                              "|------|--------|--------|"])
+                for k in all_keys:
+                    v_val = valid_metrics.get(k)
+                    t_val = test_metrics.get(k)
+                    v_str = f"{v_val:.4f}" if isinstance(v_val, float) else (str(v_val) if v_val is not None else "-")
+                    t_str = f"{t_val:.4f}" if isinstance(t_val, float) else (str(t_val) if t_val is not None else "-")
+                    lines.append(f"| {k} | {v_str} | {t_str} |")
+            elif isinstance(model_metrics, dict) and model_metrics and not valid_metrics and not test_metrics:
+                # 兼容旧格式：扁平 metrics dict
+                flat_metrics = {k: v for k, v in model_metrics.items() if isinstance(v, (int, float))}
+                if flat_metrics:
+                    lines.extend(["", "### 训练阶段指标", "", "| 指标 | 数值 |", "|------|------|"])
+                    for k, v in flat_metrics.items():
+                        val = f"{v:.4f}" if isinstance(v, float) else str(v)
+                        lines.append(f"| {k} | {val} |")
         else:
             error = model_result.get('error', '未执行')
             lines.append(f"*模型训练未执行或失败: {error}*")
@@ -408,8 +432,9 @@ class ReportGenerator:
             metrics = evaluation_result.get('metrics', {})
             lines.extend([
                 "**评估状态**: 成功",
+                f"- **评估数据**: `{evaluation_result.get('data_path', 'N/A')}`",
                 "",
-                "### 评估指标",
+                "### 独立测试集评估指标",
                 "",
                 "| 指标 | 数值 |",
                 "|------|------|"
@@ -417,6 +442,29 @@ class ReportGenerator:
             for k, v in metrics.items():
                 val = f"{v:.4f}" if isinstance(v, float) else str(v)
                 lines.append(f"| {k} | {val} |")
+
+            # 对比训练阶段测试集指标与独立评估指标
+            training_test_metrics = {}
+            ts_metrics = (training_summary or {}).get("metrics", {})
+            if isinstance(ts_metrics, dict) and isinstance(ts_metrics.get("test"), dict):
+                training_test_metrics = ts_metrics["test"]
+            if training_test_metrics:
+                common = [k for k in metrics if k in training_test_metrics
+                          and isinstance(metrics[k], (int, float))
+                          and isinstance(training_test_metrics[k], (int, float))]
+                if common:
+                    lines.extend([
+                        "",
+                        "### 训练阶段 vs 独立评估（测试集）",
+                        "",
+                        "| 指标 | 训练阶段测试集 | 独立评估测试集 | 差异 |",
+                        "|------|---------------|---------------|------|",
+                    ])
+                    for k in common:
+                        tv = training_test_metrics[k]
+                        ev = metrics[k]
+                        diff = ev - tv
+                        lines.append(f"| {k} | {tv:.4f} | {ev:.4f} | {diff:+.4f} |")
         else:
             lines.append("*模型评估未执行或失败*")
         lines.append("")
@@ -458,7 +506,14 @@ class ReportGenerator:
         lines = ["### 模型性能总结", ""]
 
         eval_metrics = evaluation_result.get("metrics", {})
-        train_metrics = training_summary.get("metrics", {}) or model_result.get("metrics", {})
+        # train_metrics 可能是嵌套格式 {valid: {...}, test: {...}} 或扁平格式
+        raw_train_metrics = training_summary.get("metrics", {}) or model_result.get("metrics", {})
+        if isinstance(raw_train_metrics.get("valid"), dict):
+            valid_metrics = raw_train_metrics["valid"]
+            train_test_metrics = raw_train_metrics.get("test", {})
+        else:
+            valid_metrics = raw_train_metrics
+            train_test_metrics = {}
 
         if not eval_metrics:
             lines.append("*评估结果不可用，无法生成定量结论。*")
@@ -483,24 +538,25 @@ class ReportGenerator:
             if mae is not None:
                 lines.append(f"- **测试集 MAE**: {mae:.4f}")
 
-        # 过拟合检查
-        if train_metrics and eval_metrics:
-            lines.extend(["", "### 过拟合分析", ""])
+        # 过拟合检查（验证集 vs 测试集）
+        compare_metrics = valid_metrics or train_test_metrics
+        if compare_metrics and eval_metrics:
+            lines.extend(["", "### 过拟合分析（验证集 vs 测试集）", ""])
             overfit_detected = False
-            for key in train_metrics:
-                if key in eval_metrics and isinstance(train_metrics[key], (int, float)) and isinstance(eval_metrics[key], (int, float)):
-                    train_val = train_metrics[key]
+            for key in compare_metrics:
+                if key in eval_metrics and isinstance(compare_metrics[key], (int, float)) and isinstance(eval_metrics[key], (int, float)):
+                    ref_val = compare_metrics[key]
                     eval_val = eval_metrics[key]
-                    if train_val != 0:
-                        gap = abs(train_val - eval_val) / abs(train_val)
+                    if ref_val != 0:
+                        gap = abs(ref_val - eval_val) / abs(ref_val)
                         if gap > 0.1:
                             lines.append(
-                                f"- **{key}**: 训练 {train_val:.4f} vs 测试 {eval_val:.4f}"
+                                f"- **{key}**: 验证集 {ref_val:.4f} vs 测试集 {eval_val:.4f}"
                                 f" (差距 {gap:.1%}，可能过拟合)"
                             )
                             overfit_detected = True
             if not overfit_detected:
-                lines.append("- 训练与测试指标差距在合理范围内，未检测到明显过拟合。")
+                lines.append("- 验证集与测试集指标差距在合理范围内，未检测到明显过拟合。")
 
         # 改进建议
         lines.extend(["", "### 改进建议", ""])

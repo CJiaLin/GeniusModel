@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from .memory import Memory, MemoryType
 from .observation import Observation, ObservationType
 from .middleware import Middleware, MiddlewareChain, IterationContext
+from .stream_callback import StreamCallbackFn, StreamEvent, StreamEventType
 from ..tools.base_tool import BaseTool, ToolResult
 from ..config import ConfigLoader, get_config_loader
 from ..logger import LLMLogger, get_llm_logger
@@ -69,6 +70,7 @@ class ReActAgent(ABC):
         self._current_iteration = 0
         self._paused_for_confirmation = False
         self._confirmation_callback: Optional[Callable] = None
+        self._stream_callback: StreamCallbackFn = None
 
         # 初始化配置加载器
         self.config_loader = get_config_loader()
@@ -124,6 +126,10 @@ class ReActAgent(ABC):
         self.tools[name] = tool
         if self.verbose:
             print(f"[ReActAgent] 注册工具: {name}")
+
+    def set_stream_callback(self, callback: StreamCallbackFn):
+        """设置流式输出回调函数"""
+        self._stream_callback = callback
     
     def register_tools(self, tools: Dict[str, BaseTool]):
         """批量注册工具"""
@@ -355,22 +361,35 @@ class ReActAgent(ABC):
             raise ValueError("LLM 未设置")
 
         # 使用流式输出
+        import time as _time
         full_response = ""
         print(f"[LLM] 开始流式输出 (stage: {stage})...")
+        _t0 = _time.time()
+        _ttft = None
 
         try:
             for chunk in self.llm.stream(prompt):
                 if chunk.content:
+                    if _ttft is None:
+                        _ttft = _time.time() - _t0
+                        print(f"\n[LLM] 首 token 响应时间 (TTFT): {_ttft:.2f}s")
                     content = chunk.content
                     full_response += content
                     print(content, end="", flush=True)
+                    if self._stream_callback:
+                        self._stream_callback(StreamEvent(StreamEventType.CONTENT, content))
         except Exception as e:
             # 如果流式输出失败，回退到同步调用
             print(f"\n[LLM] 流式输出失败，回退到同步调用: {e}")
             response = self.llm.invoke(prompt)
             full_response = response.content if hasattr(response, 'content') else str(response)
+            if self._stream_callback:
+                self._stream_callback(StreamEvent(StreamEventType.CONTENT, full_response))
 
-        print()  # 换行
+        _total = _time.time() - _t0
+        _gen_time = _total - (_ttft or 0)
+        print(f"\n[LLM] 耗时统计 — TTFT: {_ttft:.2f}s | 生成: {_gen_time:.2f}s | 总计: {_total:.2f}s"
+              if _ttft else f"\n[LLM] 总耗时: {_total:.2f}s")
 
         # 返回与 invoke 相同格式的响应对象
         return AIMessage(content=full_response)
@@ -581,6 +600,8 @@ class ReActAgent(ABC):
                 ctx = self._middleware_chain.run_before_tool(ctx)
 
                 # 执行工具
+                if self._stream_callback:
+                    self._stream_callback(StreamEvent(StreamEventType.PROGRESS, f"正在使用工具: {tool_name}"))
                 obs = self._execute_tool(tool_name, tool_input)
                 observation = obs.to_prompt_text()
                 self.memory.add_observation(observation)

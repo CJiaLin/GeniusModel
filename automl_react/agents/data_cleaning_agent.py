@@ -414,6 +414,8 @@ class DataCleaningAgent(ReActAgent):
 
         # 使用 CodeActAgent 生成并执行代码
         codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300, session_id=self.session_id)
+        if self._stream_callback:
+            codeact.set_stream_callback(self._stream_callback)
 
         # 准备执行上下文
         context = {
@@ -512,9 +514,67 @@ class DataCleaningAgent(ReActAgent):
 
         try:
             df.to_csv(output_path, index=False)
-            return True, f"确定性清洗完成并保存到 {output_path}"
         except Exception as e:
             return False, f"保存清洗结果失败: {e}"
+
+        # 保存函数式代码文件供 pipeline 使用
+        fallback_code = f'''import os
+import pandas as pd
+
+
+def clean_data(input_path, output_path, train_path=None):
+    """基础数据清洗：去重 + 缺失值填充（确定性兜底）。"""
+    if train_path is None:
+        train_path = input_path
+
+    # 从训练集计算统计量
+    train_df = pd.read_csv(train_path)
+    df = pd.read_csv(input_path)
+
+    print(f"清洗前: {{df.shape[0]}} 行, {{df.shape[1]}} 列")
+
+    # 去重
+    df = df.drop_duplicates()
+
+    # 数值列用训练集中位数填充
+    numeric_cols = df.select_dtypes(include=["number"]).columns
+    for col in numeric_cols:
+        if df[col].isnull().any():
+            med = train_df[col].median() if col in train_df.columns else df[col].median()
+            if pd.notna(med):
+                df[col] = df[col].fillna(med)
+
+    # 非数值列用训练集众数填充
+    other_cols = [c for c in df.columns if c not in numeric_cols]
+    for col in other_cols:
+        if df[col].isnull().any():
+            if col in train_df.columns:
+                mode_series = train_df[col].mode(dropna=True)
+            else:
+                mode_series = df[col].mode(dropna=True)
+            fill_val = mode_series.iloc[0] if not mode_series.empty else "UNKNOWN"
+            df[col] = df[col].fillna(fill_val)
+
+    print(f"清洗后: {{df.shape[0]}} 行, {{df.shape[1]}} 列")
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    df.to_csv(output_path, index=False)
+
+
+if __name__ == "__main__":
+    import sys
+    _input = sys.argv[1] if len(sys.argv) > 1 else "{in_path}"
+    _output = sys.argv[2] if len(sys.argv) > 2 else "{output_path}"
+    _train = sys.argv[3] if len(sys.argv) > 3 else _input
+    clean_data(_input, _output, _train)
+'''
+        self.asset_manager.save_code(
+            code=fallback_code,
+            filename="cleaning.py",
+            metadata={"stage": "data_cleaning", "fallback": True}
+        )
+
+        return True, f"确定性清洗完成并保存到 {output_path}"
 
     def _append_cleaned_data_save_fallback(self, code: str) -> str:
         """为清洗代码补充结果落盘语句，避免因未保存文件导致流程失败。"""
@@ -565,7 +625,9 @@ except Exception as _fallback_error:
         from ..utils.codeact_agent import CodeActAgent
         
         codeact = CodeActAgent(llm=self.llm, max_iterations=1, timeout=300, session_id=self.session_id)
-        
+        if self._stream_callback:
+            codeact.set_stream_callback(self._stream_callback)
+
         context = {
             "data_path": self.data_path,
             "cleaned_data_path": self.cleaned_data_path

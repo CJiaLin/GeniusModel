@@ -49,11 +49,11 @@ data_cleaning:
     </reasoning_steps>
 
     <output_format>
-    请输出 Markdown 格式的清洗方案，必须包含以下章节：
-    1. 数据质量问题概述
-    2. 针对每个问题的清洗策略
-    3. 清洗后数据的预期变化
-    4. 清洗方法与后续特征工程/建模阶段的衔接说明
+    请输出**精简的** Markdown 格式清洗方案，控制在 800 字以内，必须包含：
+    1. 数据质量问题概述（简要列表，不要展开描述）
+    2. 每个问题的清洗策略（用表格或编号列表，每项一行）
+    3. 清洗后预期变化（简要说明）
+    不要输出冗长的分析过程或推理步骤，只输出方案本身。
     </output_format>
 
     <constraints>
@@ -78,30 +78,33 @@ data_cleaning:
     </context>
 
     <output_contract>
-    代码必须通过 sys.argv 接收路径，不得硬编码路径：
-    - sys.argv[1]: 输入数据路径（默认: {data_path}）
-    - sys.argv[2]: 输出数据路径（默认: {cleaned_data_path}）
-    - sys.argv[3]: 训练集数据路径（默认: {data_path}），用于计算填充值和截断阈值
-    必须输出的统计: 清洗前后行数/列数对比
+    代码必须定义主函数 clean_data，签名：
+      def clean_data(input_path, output_path, train_path=None):
+
+    函数内部逻辑：
+    - 如果 train_path 为 None，则 train_path = input_path
+    - 从 train_path 计算统计量（中位数、众数等），应用到 input_path 的数据上
+    - 保存清洗后的数据到 output_path
+    - 必须输出清洗前后行数/列数对比
+
+    文件末尾必须有 if __name__ == "__main__": 块：
+      if __name__ == "__main__":
+          import sys
+          _input = sys.argv[1] if len(sys.argv) > 1 else "{data_path}"
+          _output = sys.argv[2] if len(sys.argv) > 2 else "{cleaned_data_path}"
+          _train = sys.argv[3] if len(sys.argv) > 3 else _input
+          clean_data(_input, _output, _train)
+
+    规则：
+    - 所有清洗逻辑在 clean_data 函数内（可定义辅助函数）
+    - 不要定义 def main()
+    - import 写在文件顶部，所有 import 必须单行
+    - 不要使用 globals().update()
+    - **只输出 Python 代码块，不要输出解释、说明或分析文字。代码注释控制在必要最少量。**
     </output_contract>
 
-    <requirements>
-    1. 代码开头必须使用以下模式获取路径（第一行可执行代码）:
-       import sys
-       input_path = sys.argv[1] if len(sys.argv) > 1 else "{data_path}"
-       output_path = sys.argv[2] if len(sys.argv) > 2 else "{cleaned_data_path}"
-       train_path = sys.argv[3] if len(sys.argv) > 3 else "{data_path}"
-    2. 使用 pandas 进行数据处理，代码完整可执行，包含所有必要导入
-    3. 从 input_path 读取数据，保存清洗后的数据到 output_path
-    4. 本阶段仅用无状态清洗方法，复杂方法（如 KNN 填充）留给后续阶段
-    5. 代码对增量数据也适用，不假设数据规模或分布不变
-    6. 包含详细注释
-    7. 如果数据中存在 Id/ID/index 等标识列，必须在输出文件中保留
-    8. 代码格式约束：不要将代码包装在 def main() 中，不要使用 globals().update()，不要定义名为 clean_data 的函数（此名称由流水线框架保留），所有 import 必须写在单行（不要用括号换行）
-    </requirements>
-
     <reusability>
-    此代码将被复用于验证集和测试集的清洗（通过不同的 sys.argv 参数调用）。因此：
+    此代码将被复用于验证集和测试集的清洗（通过不同参数调用 clean_data 函数）。因此：
     - 所有填充值、截断阈值等统计量必须从 train_path 指向的训练集动态计算（如中位数、四分位数、众数），不得在代码中硬编码方案中的数字
     - 计算完成后将这些值作为变量应用到 input_path 指向的数据上
     - 代码必须是无状态的：相同逻辑对不同大小的输入数据都不应报错
@@ -112,6 +115,7 @@ data_cleaning:
     - 保存前确保目录存在: os.makedirs(os.path.dirname(output_path), exist_ok=True)
     - 避免在空 DataFrame 上操作导致错误
     - 避免硬编码特定行索引或假设特定数据分布
+    - 如果数据中存在 Id/ID/index 等标识列，必须在输出文件中保留
     </common_pitfalls>
 
 
@@ -340,31 +344,33 @@ feature_engineering:
     </context>
 
     <output_contract>
-    代码必须通过 sys.argv 接收路径，不得硬编码路径：
-    - sys.argv[1]: 输入数据路径（默认: {data_path}）
-    - sys.argv[2]: 输出数据路径（默认: {features_data_path}）
-    - sys.argv[3]: 训练集数据路径（默认: {data_path}），用于拟合编码器和计算统计量
-    必须输出的变量: 新生成的特征列表
+    代码必须定义主函数 engineer_features，签名：
+      def engineer_features(input_path, output_path, train_path=None):
+
+    函数内部逻辑：
+    - 如果 train_path 为 None，则 train_path = input_path
+    - 从 train_path 拟合编码器和计算统计量，应用到 input_path 的数据上
+    - 保存特征工程结果到 output_path
+    - 必须输出新生成的特征列表
+
+    文件末尾必须有 if __name__ == "__main__": 块：
+      if __name__ == "__main__":
+          import sys
+          _input = sys.argv[1] if len(sys.argv) > 1 else "{data_path}"
+          _output = sys.argv[2] if len(sys.argv) > 2 else "{features_data_path}"
+          _train = sys.argv[3] if len(sys.argv) > 3 else _input
+          engineer_features(_input, _output, _train)
+
+    规则：
+    - 所有特征工程逻辑在 engineer_features 函数内（可定义辅助函数）
+    - 不要定义 def main()
+    - import 写在文件顶部，所有 import 必须单行
+    - 不要使用 globals().update()
+    - **只输出 Python 代码块，不要输出解释文字。**
     </output_contract>
 
-    <requirements>
-    1. 代码开头必须使用以下模式获取路径（第一行可执行代码）:
-       import sys
-       input_path = sys.argv[1] if len(sys.argv) > 1 else "{data_path}"
-       output_path = sys.argv[2] if len(sys.argv) > 2 else "{features_data_path}"
-       train_path = sys.argv[3] if len(sys.argv) > 3 else "{data_path}"
-    2. 使用 pandas 进行特征工程，可选用 scikit-learn、category_encoders 等库
-    3. 代码完整可执行，包含所有必要导入
-    4. 从 input_path 读取数据，保存特征工程结果到 output_path
-    5. 目标变量不做任何变换，保持原始值输出——变换由模型训练阶段决定
-    6. 分类变量编码时考虑未见类别的处理（如 handle_unknown='ignore'）
-    7. 包含详细注释
-    8. 如果数据中存在 Id/ID/index 等标识列，必须在输出文件中保留
-    9. 代码格式约束：不要将代码包装在 def main() 中，不要使用 globals().update()，不要定义名为 engineer_features 的函数（此名称由流水线框架保留），所有 import 必须写在单行（不要用括号换行）
-    </requirements>
-
     <reusability>
-    此代码将被复用于验证集和测试集（通过不同的 sys.argv 参数调用）。因此：
+    此代码将被复用于验证集和测试集（通过不同参数调用 engineer_features 函数）。因此：
     - 所有基于训练数据的统计量（目标编码均值、频率阈值等）必须从 train_path 指向的训练集动态计算，不得在代码中硬编码数字常量
     - 不得对目标列做目标编码——验证集/测试集的目标列仅用于评估，不参与特征构建
     - 使用 sklearn OneHotEncoder(handle_unknown='ignore') 或固定列列表进行独热编码，确保不同大小数据集产生相同的列结构
@@ -376,6 +382,8 @@ feature_engineering:
     - 保存前确保目录存在: os.makedirs(os.path.dirname(output_path), exist_ok=True)
     - 编码分类变量时处理未见类别，避免推理阶段报错
     - 避免原始列和变换后列同时保留导致重复特征
+    - 目标变量不做任何变换，保持原始值输出——变换由模型训练阶段决定
+    - 如果数据中存在 Id/ID/index 等标识列，必须在输出文件中保留
     </common_pitfalls>
 
 
@@ -492,6 +500,17 @@ model_training:
     - 如果上游文本与当前训练数据事实冲突，以当前数据事实为准
     </core_principles>
 
+    <class_imbalance>
+    分类任务必须在训练前检查目标列的类别分布：
+    1. 计算少数类占比（minority_ratio = 少数类样本数 / 总样本数）
+    2. 如果 minority_ratio < 30%，必须采取以下至少一项措施：
+       - 使用 class_weight='balanced' 或手动设置权重
+       - 选择对不平衡数据友好的评估指标（PR-AUC、F1、Recall 优于 Accuracy）
+       - 考虑使用 SMOTE 等过采样技术（仅在训练集上，不可在验证/测试集上）
+    3. 如果 minority_ratio < 10%，属于严重不平衡，强烈建议同时使用 class_weight + PR-AUC 作为主指标
+    4. 训练完成后必须检查：模型在测试集上是否预测出了少数类（如果预测全为多数类，说明模型无效）
+    </class_imbalance>
+
     <data_integrity>
     始终使用当前提供的实际数据文件和字段名。当技术参考、经验模板与当前数据冲突时，以当前数据为准。
     </data_integrity>
@@ -533,9 +552,10 @@ model_training:
     1. **学习领域知识（必做）**：直接使用 `read_skill` 工具（不要用 search_skills）读取 `afrexai-ml-engineering-1.0.0` 的 `phase3-experiment-management` 章节，获取完整的模型选择和实验管理范式后再进行方案设计
     2. 确认训练输入文件是特征工程阶段的输出: {data_path}——不得回退到原始数据或清洗阶段数据
     3. 确认目标变量及其与任务类型的匹配关系
-    4. 综合前序报告和 skill 知识（探索性分析用于理解分布与背景，特征分析报告用于识别有效信号和已确认风险）；若某类报告缺失，说明”未提供该报告”
-    5. 根据数据特点选择模型家族，说明主推荐模型和对比基线
-    6. 定义评估指标和验证策略
+    4. **检查类别不平衡**：如果是分类任务，必须统计训练集中各类别的样本数和占比，评估是否存在不平衡（少数类 < 30%），并在方案中写明应对策略（class_weight、采样、指标选择）
+    5. 综合前序报告和 skill 知识（探索性分析用于理解分布与背景，特征分析报告用于识别有效信号和已确认风险）；若某类报告缺失，说明”未提供该报告”
+    6. 根据数据特点选择模型家族，说明主推荐模型和对比基线
+    7. 定义评估指标和验证策略
     </reasoning_steps>
 
     <output_format>
@@ -592,43 +612,75 @@ model_training:
     训练摘要保存路径: {training_summary_path}
     </data_assets>
 
+    <output_contract>
+    代码必须定义主函数 train_model，签名：
+      def train_model(train_path, valid_path, test_path, model_dir, target_column, summary_path=None):
+
+    函数返回值（dict）：
+      return {{
+          "metrics": metrics,
+          "selected_feature_names": selected_feature_names,
+          "model_path": model_path,
+          "train_split_path": train_path,
+          "valid_split_path": valid_path,
+          "test_split_path": test_path,
+          "training_summary_path": summary_path,
+      }}
+
+    文件末尾必须有 if __name__ == "__main__": 块：
+      if __name__ == "__main__":
+          import os
+          result = train_model(
+              train_path="{train_split_path}",
+              valid_path="{valid_split_path}",
+              test_path="{test_split_path}",
+              model_dir=os.path.dirname("{model_path}"),
+              target_column="{target_column}",
+              summary_path="{training_summary_path}",
+          )
+          metrics = result["metrics"]
+          selected_feature_names = result["selected_feature_names"]
+          model_path = result["model_path"]
+          train_split_path = result["train_split_path"]
+          valid_split_path = result["valid_split_path"]
+          test_split_path = result["test_split_path"]
+          training_summary_path = result["training_summary_path"]
+
+    规则：
+    - 所有训练逻辑在 train_model 函数内（可定义辅助函数）
+    - 不要定义 def main()
+    - import 写在文件顶部，所有 import 必须单行
+    - 不要使用 globals().update()
+    - **只输出 Python 代码块。**
+    </output_contract>
+
     <requirements>
     数据与特征：
-    1. 训练集、验证集、测试集已经过相同的清洗和特征工程预处理，列结构一致，直接从以下路径读取即可：
-       - 训练集: {train_split_path}
-       - 验证集: {valid_split_path}
-       - 测试集: {test_split_path}
-    2. 默认使用除目标列外的所有特征，仅排除方案中明确列出的排除项（常量列、泄露特征）；必须排除 Id/ID/index 等行标识列（它们与目标无因果关系，属于数据泄漏）
-    3. 不得重新切分数据，直接消费上述三个文件
-    4. 输入数据来自特征工程阶段的输出，所有分类变量已完成编码（one-hot、序数编码、目标编码等），不得在 preprocessor 中再次对任何列做 OneHotEncoder 或 OrdinalEncoder 等编码变换。preprocessor 仅用于数值特征的缩放（如 StandardScaler），若不需要缩放可将 preprocessor 设为 None
+    1. 训练集、验证集、测试集已经过相同的清洗和特征工程预处理，列结构一致，通过函数参数 train_path/valid_path/test_path 接收
+    2. 默认使用除目标列外的所有特征，仅排除方案中明确列出的排除项（常量列、泄露特征）；必须排除 Id/ID/index 等行标识列
+    3. 不得重新切分数据，直接消费传入的三个文件
+    4. 输入数据来自特征工程阶段的输出，所有分类变量已完成编码，不得在 preprocessor 中再次做编码变换。preprocessor 仅用于数值特征的缩放（如 StandardScaler），若不需要缩放可设为 None
     5. valid 只用于模型选择与调参，test 只用于最终评估
-    6. 若某个文件不存在或为空，安全跳过并记录日志（如无 valid 则用 test 做调参）
+    6. 若某个文件不存在或为空，安全跳过并记录日志
 
     模型保存：
-    7. 模型必须包装为 dict 保存到 {model_path}，至少包含键：model、selected_feature_names、target_transform、preprocessor（无预处理器时写 None）
-    8. 如果多模型对比，基于主验证指标选最佳模型，保存的模型必须与 training_summary 一致
+    7. 模型路径由 model_dir 参数决定：model_path = os.path.join(model_dir, "trained_model.pkl")
+    8. 模型必须包装为 dict 保存，至少包含键：model、selected_feature_names、target_transform、preprocessor（无预处理器时写 None）
+    9. 如果多模型对比，基于主验证指标选最佳模型
 
     目标变量：
-    9. 如果对目标变量做变换（如 log1p），必须显式写出变换和逆变换逻辑，split 资产中目标列保持原始尺度
+    10. 如果对目标变量做变换（如 log1p），必须显式写出变换和逆变换逻辑
 
-    代码质量：
-    10. 完整可执行，包含所有导入语句和详细注释
-    11. 方案中要排除的特征若在数据中不存在，安全跳过；目标列不存在则抛错
-    12. 代码格式约束：不要将代码包装在 def main() 中，不要使用 globals().update()，所有 import 必须写在单行（不要用括号换行）
+    训练摘要：
+    11. 训练摘要 JSON 保存到 summary_path，必须包含：metrics, selected_feature_names, target_column, task_type, target_transform, model_path
     </requirements>
-
-    <output_contract>
-    代码中必须定义以下变量：metrics, selected_feature_names, model_path, train_split_path, valid_split_path, test_split_path, training_summary_path
-
-    训练摘要 JSON ({training_summary_path}) 必须包含：metrics, selected_feature_names, target_column, task_type, target_transform, model_path, train_split_path, valid_split_path, test_split_path
-
-    selected_feature_names 必须反映最终实际送入模型的特征名。
-    </output_contract>
 
     <common_pitfalls>
     - 用 os.makedirs 确保输出目录存在
     - JSON 序列化前将 numpy 类型转为 Python 原生类型
     - 代码逻辑必须与 plan 中的特征使用原则、目标变量处理策略、评估指标口径保持一致
+    - 分类任务：训练前必须打印目标列的类别分布；如果少数类占比 < 30%，必须使用 class_weight='balanced' 或等效策略
+    - 分类任务：训练完成后必须检查测试集预测值的类别分布，如果预测全为同一类则打印警告
     </common_pitfalls>
 
   plan_revision: |
@@ -653,6 +705,31 @@ model_training:
     <output_format>
     输出修改后的完整方案（Markdown 格式），不要输出差异或补丁。
     保持原方案的结构和格式，仅修改用户指出的部分。
+    </output_format>
+
+  evaluation_plan_generation: |
+    <task_definition>
+    基于已完成的模型训练结果，生成一份模型评估方案。
+    </task_definition>
+
+    <context>
+    {task_context}{current_evaluation_context}
+    </context>
+
+    <reasoning_steps>
+    请按以下步骤推理：
+    1. 核实模型文件、测试集文件、训练摘要三项产物是否齐全
+    2. 对齐本次评估的指标口径与训练摘要中记录的指标定义
+    3. 确定评估指标清单（必须与训练阶段使用的指标一致，并可补充额外指标）
+    4. 说明评估产物的用途与限制
+    </reasoning_steps>
+
+    <output_format>
+    请输出 Markdown 格式的评估方案，包含：
+    1. 评估前置条件核实（模型文件、测试集、训练摘要）
+    2. 评估指标清单及其定义
+    3. 与训练阶段指标的对齐说明
+    4. 评估产物用途
     </output_format>
 
 
@@ -744,6 +821,12 @@ data_splitting:
     4. test 集只用于最终评估，valid 集用于模型选择和调参
     </reasoning_approach>
 
+    <important_constraint>
+    本阶段只负责将数据划分为固定的 train/valid/test 三份数据集（或 train/test 两份），不涉及交叉验证。
+    交叉验证（如 K-Fold CV）属于模型训练阶段的工作，不要在切分方案中推荐交叉验证策略。
+    如果数据量较小需要更充分利用数据，可以在方案中注明"建议模型训练阶段在 train+valid 上使用交叉验证"，但切分本身仍然产出固定的 train/valid/test。
+    </important_constraint>
+
   plan_generation: |
     <task_definition>
     基于任务上下文和数据事实，生成"数据集切分方案"，供用户确认和修改。
@@ -771,6 +854,9 @@ data_splitting:
     4. 主要风险（类别不平衡、样本过少、时间泄漏、实体泄漏）
     5. 用户可修改的关键参数
     6. "建议确认项"，便于用户直接反馈修改
+
+    注意：本阶段只产出固定的 train/valid/test 划分，不要推荐交叉验证（K-Fold 等）。
+    交叉验证属于模型训练阶段的工作。如果数据量较小，可以注明"建议在模型训练阶段使用交叉验证"。
     </output_format>
 
   plan_revision: |

@@ -243,7 +243,8 @@ import joblib
 import pickle
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
-    mean_squared_error, mean_absolute_error, r2_score, mean_squared_log_error
+    mean_squared_error, mean_absolute_error, r2_score, mean_squared_log_error,
+    precision_recall_curve
 )
 import numpy as np
 
@@ -361,59 +362,87 @@ def rmsle_score(y_true, y_pred):
     y_true = np.maximum(y_true, 0)
     return np.sqrt(mean_squared_log_error(y_true, y_pred))
 
-# 加载数据
-df = pd.read_csv("{data_path}")
-if "{target_column}" in df.columns:
-    X = df.drop(columns=["{target_column}"])
-    y = df["{target_column}"]
-else:
-    X = df
-    y = None
 
-# 加载模型
-model_artifact = load_model_artifact("{model_path}")
+def evaluate_predictions(y_true, y_pred, task_type, model_artifact, X,
+                         expected_feature_names=None):
+    """计算评估指标，返回 dict。"""
+    results = {{}}
+    if y_true is None:
+        results["warning"] = "测试集不包含目标列，无法计算评估指标"
+        return results
 
-# 预测
-y_pred, evaluation_diagnostics = predict_from_artifact(
-    model_artifact,
-    X,
-    EXPECTED_FEATURE_NAMES,
-    INFERRED_TARGET_TRANSFORM,
-)
+    if task_type == "classification":
+        n_classes = len(np.unique(y_true))
+        avg = "binary" if n_classes == 2 else "weighted"
 
-# 计算评估指标
-evaluation_results = {{}}
+        results["accuracy"] = float(accuracy_score(y_true, y_pred))
+        results["precision"] = float(precision_score(y_true, y_pred, average=avg, zero_division=0))
+        results["recall"] = float(recall_score(y_true, y_pred, average=avg, zero_division=0))
+        results["f1"] = float(f1_score(y_true, y_pred, average=avg, zero_division=0))
 
-if y is None:
-    evaluation_results["warning"] = "测试集不包含目标列，无法计算评估指标"
-elif "{task_type}" == "classification":
-    if "accuracy" in [{metrics_code}]:
-        evaluation_results["accuracy"] = float(accuracy_score(y, y_pred))
-    if "precision" in [{metrics_code}]:
-        evaluation_results["precision"] = float(precision_score(y, y_pred, average="weighted"))
-    if "recall" in [{metrics_code}]:
-        evaluation_results["recall"] = float(recall_score(y, y_pred, average="weighted"))
-    if "f1" in [{metrics_code}]:
-        evaluation_results["f1"] = float(f1_score(y, y_pred, average="weighted"))
-    if "auc" in [{metrics_code}] and hasattr(model_artifact, "predict_proba"):
-        y_pred_proba = model_artifact.predict_proba(X)
-        if y_pred_proba.shape[1] == 2:
-            evaluation_results["auc"] = float(roc_auc_score(y, y_pred_proba[:, 1]))
-        else:
-            evaluation_results["auc"] = float(roc_auc_score(y, y_pred_proba, multi_class="ovr"))
-else:
-    if "mse" in [{metrics_code}]:
-        evaluation_results["mse"] = float(mean_squared_error(y, y_pred))
-    if "rmse" in [{metrics_code}]:
-        evaluation_results["rmse"] = float(np.sqrt(mean_squared_error(y, y_pred)))
-    if "mae" in [{metrics_code}]:
-        evaluation_results["mae"] = float(mean_absolute_error(y, y_pred))
-    if "r2" in [{metrics_code}]:
-        evaluation_results["r2"] = float(r2_score(y, y_pred))
-    evaluation_results["rmsle"] = float(rmsle_score(y, y_pred))
-    evaluation_results["mape"] = float(np.mean(np.abs((y - y_pred) / (y + 1e-6))) * 100)
+        _model = model_artifact["model"] if isinstance(model_artifact, dict) and "model" in model_artifact else model_artifact
+        if hasattr(_model, "predict_proba"):
+            try:
+                _X_aligned, _ = align_features(
+                    X, expected_feature_names, _model,
+                    model_artifact if isinstance(model_artifact, dict) else None,
+                )
+                _preprocessor = model_artifact.get("preprocessor") if isinstance(model_artifact, dict) else None
+                _model_input = _preprocessor.transform(_X_aligned) if _preprocessor is not None else _X_aligned
 
-print("评估完成:", evaluation_results)
+                if n_classes == 2:
+                    y_prob = _model.predict_proba(_model_input)[:, 1]
+                    results["roc_auc"] = float(roc_auc_score(y_true, y_prob))
+                    prec_vals, rec_vals, _ = precision_recall_curve(y_true, y_prob)
+                    results["pr_auc"] = float(np.trapz(prec_vals[::-1], rec_vals[::-1]))
+                else:
+                    y_prob = _model.predict_proba(_model_input)
+                    results["roc_auc"] = float(roc_auc_score(y_true, y_prob, multi_class="ovr"))
+            except Exception:
+                pass
+    else:
+        results["mse"] = float(mean_squared_error(y_true, y_pred))
+        results["rmse"] = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+        results["mae"] = float(mean_absolute_error(y_true, y_pred))
+        results["r2"] = float(r2_score(y_true, y_pred))
+        results["rmsle"] = float(rmsle_score(y_true, y_pred))
+        results["mape"] = float(np.mean(np.abs((y_true - y_pred) / (y_true + 1e-6))) * 100)
+
+    return results
+
+
+if __name__ == "__main__":
+    # 加载数据
+    df = pd.read_csv("{data_path}")
+    if "{target_column}" in df.columns:
+        X = df.drop(columns=["{target_column}"])
+        y = df["{target_column}"]
+    else:
+        X = df
+        y = None
+
+    # 加载模型
+    model_artifact = load_model_artifact("{model_path}")
+
+    # 预测
+    y_pred, evaluation_diagnostics = predict_from_artifact(
+        model_artifact,
+        X,
+        EXPECTED_FEATURE_NAMES,
+        INFERRED_TARGET_TRANSFORM,
+    )
+
+    # 计算评估指标
+    evaluation_results = evaluate_predictions(
+        y_true=y,
+        y_pred=y_pred,
+        task_type="{task_type}",
+        model_artifact=model_artifact,
+        X=X,
+        expected_feature_names=EXPECTED_FEATURE_NAMES,
+    )
+
+    print("评估完成:", evaluation_results)
 '''
         return code
 

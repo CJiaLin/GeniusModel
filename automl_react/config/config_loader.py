@@ -221,10 +221,17 @@ class ConfigLoader:
         # 获取阶段指定的模型名称，或使用默认模型
         model_name = stage_models.get(stage)
         if model_name:
-            return self.get_llm_config(model_name)
+            model_config = self.get_llm_config(model_name)
+        else:
+            model_config = self.get_llm_config()
 
-        # 返回默认模型配置
-        return self.get_llm_config()
+        # 应用阶段级 max_tokens 覆盖
+        stage_max_tokens = config.get("stage_max_tokens", {})
+        if stage in stage_max_tokens:
+            model_config = dict(model_config)
+            model_config["max_tokens"] = stage_max_tokens[stage]
+
+        return model_config
 
     def get_logging_config(self) -> Dict[str, Any]:
         """

@@ -305,6 +305,8 @@ class FeatureEngineeringAgent(ReActAgent):
 
         # 使用 CodeActAgent 生成并执行代码
         codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300, session_id=self.session_id)
+        if self._stream_callback:
+            codeact.set_stream_callback(self._stream_callback)
 
         context = {
             "data_path": self.data_path,
@@ -422,9 +424,77 @@ class FeatureEngineeringAgent(ReActAgent):
 
         try:
             out_df.to_csv(output_path, index=False)
-            return True, f"确定性特征工程完成并保存到 {output_path}"
         except Exception as e:
             return False, f"保存特征工程结果失败: {e}"
+
+        # 保存函数式代码文件供 pipeline 使用
+        fallback_code = f'''import os
+import pandas as pd
+
+
+def engineer_features(input_path, output_path, train_path=None):
+    """基础特征工程：缺失填充 + 类别编码（确定性兜底）。"""
+    if train_path is None:
+        train_path = input_path
+
+    train_df = pd.read_csv(train_path)
+    df = pd.read_csv(input_path)
+
+    target_column = "{target}"
+    target_series = None
+    if target_column and target_column in df.columns:
+        target_series = df[target_column].copy()
+        X = df.drop(columns=[target_column]).copy()
+        train_X = train_df.drop(columns=[target_column], errors="ignore").copy()
+    else:
+        X = df.copy()
+        train_X = train_df.drop(columns=[target_column], errors="ignore").copy()
+
+    # 数值列用训练集中位数填充
+    numeric_cols = X.select_dtypes(include=["number"]).columns
+    for col in numeric_cols:
+        if X[col].isnull().any():
+            med = train_X[col].median() if col in train_X.columns else X[col].median()
+            if pd.notna(med):
+                X[col] = X[col].fillna(med)
+
+    # 类别列编码
+    cat_cols = X.select_dtypes(include=["object", "category", "bool"]).columns
+    for col in cat_cols:
+        X[col] = X[col].fillna("UNKNOWN").astype(str)
+        # 用训练集建立映射
+        if col in train_X.columns:
+            categories = train_X[col].fillna("UNKNOWN").astype(str).unique()
+            cat_map = {{cat: i for i, cat in enumerate(sorted(categories))}}
+            X[col] = X[col].map(cat_map).fillna(-1).astype(int)
+        else:
+            X[col] = pd.factorize(X[col])[0]
+
+    new_features = list(cat_cols)
+    print(f"新生成/变换的特征: {{new_features}}")
+
+    out_df = X.copy()
+    if target_series is not None:
+        out_df[target_column] = target_series.values
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    out_df.to_csv(output_path, index=False)
+
+
+if __name__ == "__main__":
+    import sys
+    _input = sys.argv[1] if len(sys.argv) > 1 else "{in_path}"
+    _output = sys.argv[2] if len(sys.argv) > 2 else "{output_path}"
+    _train = sys.argv[3] if len(sys.argv) > 3 else _input
+    engineer_features(_input, _output, _train)
+'''
+        self.asset_manager.save_code(
+            code=fallback_code,
+            filename="feature_engineering.py",
+            metadata={"stage": "feature_engineering", "fallback": True}
+        )
+
+        return True, f"确定性特征工程完成并保存到 {output_path}"
 
     def _generate_markdown_text(self, prompt: str, stage: str = "") -> str:
         """直接生成 Markdown 文本，不经过 CodeAct 执行链路。"""
@@ -535,7 +605,9 @@ class FeatureEngineeringAgent(ReActAgent):
         from ..utils.codeact_agent import CodeActAgent
         
         codeact = CodeActAgent(llm=self.llm, max_iterations=5, timeout=300, session_id=self.session_id)
-        
+        if self._stream_callback:
+            codeact.set_stream_callback(self._stream_callback)
+
         context = {
             "features_data_path": self.features_data_path,
             "target_column": self.target_column,

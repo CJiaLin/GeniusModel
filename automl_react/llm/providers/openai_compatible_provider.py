@@ -57,12 +57,20 @@ class OpenAICompatibleProvider(BaseProvider):
                 f"已知的 sub_provider: {list(_KNOWN_PROVIDERS.keys())}"
             )
 
+        # timeout: 支持秒(int)或毫秒(>1000的大数自动转换为秒)
+        raw_timeout = config.get("timeout")
+        if raw_timeout is not None:
+            timeout_sec = raw_timeout / 1000 if raw_timeout > 1000 else raw_timeout
+        else:
+            timeout_sec = 120  # 默认 120 秒
+
         kwargs = {
             "model": config.get("model_name", "gpt-4"),
             "temperature": config.get("temperature", 0.1),
             "max_tokens": config.get("max_tokens", 4096),
             "api_key": api_key,
             "base_url": base_url,
+            "timeout": timeout_sec,
         }
 
         # 某些提供商需要额外的请求头

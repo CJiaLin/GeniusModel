@@ -12,7 +12,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -35,7 +35,7 @@ from automl_react.agents.data_analysis_agent import DataAnalysisAgent
 from automl_react.report import PipelineGenerator, ReportGenerator
 from automl_react.workflow import WorkflowState, WorkflowStage
 from automl_react.confirmation import ConfirmationManager, ConfirmationStatus
-from automl_react.confirmation.confirmation_point import SkillReference
+from automl_react.confirmation.confirmation_point import SkillReference, UserConfirmationPoint
 from automl_react.assets import get_asset_manager
 from automl_react.logger import get_llm_logger
 from automl_react.skills_loader import get_skill_loader
@@ -65,7 +65,7 @@ _sessions: Dict[str, Dict[str, Any]] = {}
 # 请求模型
 class StartWorkflowRequest(BaseModel):
     session_id: str
-    data_path: str
+    data_path: Optional[str] = None
     target_column: str
     task_type: str = "classification"
     model: str = "claude-sonnet-4-20250514-thinking"
@@ -101,11 +101,14 @@ def _get_session_original_data_path(session_id: str) -> Path:
 
 def _ensure_session_data_path(session_id: str, source_data_path: Optional[str]) -> Optional[str]:
     """确保源数据已落入会话资产目录，并返回统一后的资产路径。"""
-    if not source_data_path:
-        return None
-
     session_data_path = _get_session_original_data_path(session_id)
     session_data_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not source_data_path:
+        # 没有传入路径时，检查是否已通过 /upload 上传过
+        if session_data_path.exists():
+            return str(session_data_path)
+        return None
 
     source_path = Path(source_data_path)
     if source_path.exists():
@@ -426,32 +429,79 @@ class LLMClientError(Exception):
 def create_llm_client(model: str = None):
     """
     创建 LLM 客户端
-
-    根据配置通过 LLMProviderFactory 创建对应提供商的 LLM 客户端
+    
+    根据配置创建真实的 LLM 客户端，如果失败则抛出明确的错误
     """
-    from automl_react.llm import LLMProviderFactory
-
+    errors = []
+    
+    # 首先尝试从配置加载
     try:
         config_loader = get_config_loader()
         llm_config = config_loader.get_llm_config(model)
-        return LLMProviderFactory.create(llm_config)
+        
+        provider = llm_config.get("provider", "openai")
+        model_name = llm_config.get("model_name", model or "gpt-4")
+        
+        if provider == "anthropic":
+            try:
+                from langchain_anthropic import ChatAnthropic
+                api_key = llm_config.get("api_key")
+                if not api_key:
+                    raise LLMClientError(
+                        f"Anthropic API 密钥未配置。\n"
+                        f"请设置环境变量 ANTHROPIC_API_KEY 或在配置文件中指定 api_key。\n"
+                        f"当前模型: {model_name}"
+                    )
+                return ChatAnthropic(
+                    model=model_name,
+                    temperature=llm_config.get("temperature", 0.1),
+                    max_tokens=llm_config.get("max_tokens", 4096),
+                    api_key=api_key
+                )
+            except ImportError as e:
+                errors.append(f"langchain_anthropic 未安装: {e}")
+        
+        elif provider == "openai":
+            try:
+                from langchain_openai import ChatOpenAI
+                api_key = llm_config.get("api_key")
+                if not api_key:
+                    raise LLMClientError(
+                        f"OpenAI API 密钥未配置。\n"
+                        f"请设置环境变量 OPENAI_API_KEY 或在配置文件中指定 api_key。\n"
+                        f"当前模型: {model_name}"
+                    )
+                return ChatOpenAI(
+                    model=model_name,
+                    temperature=llm_config.get("temperature", 0.1),
+                    max_tokens=llm_config.get("max_tokens", 4096),
+                    api_key=api_key,
+                    base_url=llm_config.get("base_url")
+                )
+            except ImportError as e:
+                errors.append(f"langchain_openai 未安装: {e}")
+        
     except LLMClientError:
         raise
     except Exception as e:
-        error_msg = (
-            "无法创建 LLM 客户端。\n\n"
-            "可能的原因:\n"
-            "1. 缺少必要的 Python 包:\n"
-            "   - pip install langchain-openai  # 使用 OpenAI\n"
-            "   - pip install langchain-anthropic  # 使用 Claude\n"
-            "2. API 密钥未配置:\n"
-            "   - 设置环境变量 OPENAI_API_KEY 或 ANTHROPIC_API_KEY\n"
-            "   - 或在 llm_config.yaml 中配置 api_key\n"
-            "3. 配置文件错误:\n"
-            "   - 检查 automl_react/config/llm_config.yaml 配置\n\n"
-            f"详细错误:\n  - {e}\n"
-        )
-        raise LLMClientError(error_msg)
+        errors.append(f"从配置创建 LLM 客户端失败: {e}")
+    
+    # 如果都失败了，抛出详细的错误信息
+    error_msg = "无法创建 LLM 客户端。\n\n"
+    error_msg += "可能的原因:\n"
+    error_msg += "1. 缺少必要的 Python 包:\n"
+    error_msg += "   - pip install langchain-openai  # 使用 OpenAI\n"
+    error_msg += "   - pip install langchain-anthropic  # 使用 Claude\n"
+    error_msg += "2. API 密钥未配置:\n"
+    error_msg += "   - 设置环境变量 OPENAI_API_KEY 或 ANTHROPIC_API_KEY\n"
+    error_msg += "   - 或在 llm_config.yaml 中配置 api_key\n"
+    error_msg += "3. 配置文件错误:\n"
+    error_msg += "   - 检查 automl_react/config/llm_config.yaml 配置\n\n"
+    error_msg += "详细错误:\n"
+    for err in errors:
+        error_msg += f"  - {err}\n"
+    
+    raise LLMClientError(error_msg)
 
 
 # API 路由
@@ -1043,12 +1093,21 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
                     feature_metrics_report=feature_metrics_report,
                     features_data_path=features_data_path,
                     task_description=task_description,
-                    train_split_path=_get_train_raw_data_path(workflow_state),
-                    valid_split_path=_get_valid_raw_data_path(workflow_state),
-                    test_split_path=_get_test_raw_data_path(workflow_state),
+                    train_split_path=(workflow_state.get_context("features_train_path") if workflow_state else None) or _get_train_raw_data_path(workflow_state),
+                    valid_split_path=(workflow_state.get_context("features_valid_path") if workflow_state else None) or _get_valid_raw_data_path(workflow_state),
+                    test_split_path=(workflow_state.get_context("features_test_path") if workflow_state else None) or _get_test_raw_data_path(workflow_state),
                 )
                 print(f"[API] 模型训练方案生成完成，长度: {len(result)} 字符")
-                
+
+                # 生成评估方案并合并
+                try:
+                    eval_plan = agent.generate_evaluation_plan()
+                    if eval_plan:
+                        result = result + "\n\n---\n\n## 模型评估方案\n\n" + eval_plan
+                        print(f"[API] 评估方案已合并到训练方案")
+                except Exception as eval_err:
+                    print(f"[API] 评估方案生成失败（不影响训练方案）: {eval_err}")
+
                 # 保存模型训练方案到资产
                 asset_manager.save_data(
                     data=result,
@@ -1093,52 +1152,6 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
-    elif stage == "model_evaluation":
-        model = workflow_state.get_context("model", "kimi-k2.5")
-        llm = create_llm_client(model)
-        agent = _ensure_agent(session, "evaluation", ModelEvaluationAgent, llm=llm, session_id=session_id)
-
-        try:
-            print(f"[API] ========== 模型评估阶段开始 ==========")
-
-            asset_manager = get_asset_manager(session_id=session_id)
-            model_result_json = asset_manager.read_asset("models", "model_training_result.json")
-            model_result = json.loads(model_result_json) if model_result_json else None
-
-            task_description = _compose_stage_task_description(workflow_state)
-            result = agent.generate_evaluation_plan(
-                target_column=target_column,
-                task_type=task_type,
-                model_result=model_result,
-                task_description=task_description,
-            )
-
-            asset_manager.save_data(
-                data=result,
-                filename="evaluation_plan.md",
-                asset_type="reports",
-                metadata={
-                    "stage": "model_evaluation",
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-
-            confirmation_point = confirmation_manager.add_confirmation_point(
-                stage="model_evaluation",
-                proposal_content=result
-            )
-
-            print(f"[API] ========== 模型评估阶段完成 ==========")
-            return {
-                "success": True,
-                "stage": stage,
-                "proposal": result,
-                "requires_confirmation": True,
-                "confirmation_id": confirmation_point.id,
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
     return {"success": False, "error": "未知的阶段"}
 
 
@@ -1244,18 +1257,24 @@ async def submit_confirmation(request: UserConfirmationRequest):
                 execution_result = await execute_model_training(
                     session, _get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, request.modifications
                 )
-            elif stage == "feature_evaluation":
-                execution_result = await execute_feature_evaluation(
-                    session, request.modifications
-                )
-            elif stage == "model_evaluation":
-                execution_result = await execute_model_evaluation(
-                    session, target_column, task_type
-                )
+                # 训练成功后自动执行评估
                 if execution_result.get("success"):
+                    try:
+                        eval_result = await execute_model_evaluation(
+                            session, target_column, task_type
+                        )
+                        execution_result["evaluation"] = eval_result
+                        print(f"[API] 模型评估执行完成: success={eval_result.get('success')}")
+                    except Exception as eval_err:
+                        import traceback as _tb
+                        print(f"[API] 模型评估执行失败（不影响训练结果）: {eval_err}")
+                        _tb.print_exc()
+                        execution_result["evaluation"] = {"success": False, "error": str(eval_err)}
+
+                    # 训练+评估完成后，标记工作流完成并生成报告/pipeline
                     workflow_state.transition_to(
                         WorkflowStage.COMPLETED,
-                        message="Model evaluation completed"
+                        message="Model training and evaluation completed"
                     )
                     # 自动生成报告和 JSON 摘要
                     try:
@@ -1273,16 +1292,20 @@ async def submit_confirmation(request: UserConfirmationRequest):
                     try:
                         pipeline_gen = PipelineGenerator(session_id=session_id)
                         data_path = workflow_state.get_context("data_path", "")
-                        pipeline_gen.generate_pipeline_script(
+                        pipeline_gen.generate_pipeline_package(
                             data_path=data_path,
                             target_column=target_column,
                             task_type=task_type,
                         )
-                        print(f"[API] 自动生成 pipeline 脚本完成")
+                        print(f"[API] 自动生成 pipeline 包完成")
                     except Exception as pipeline_err:
                         import traceback as _tb
                         print(f"[API] 自动 pipeline 脚本生成失败（不影响主流程）: {pipeline_err}")
                         _tb.print_exc()
+            elif stage == "feature_evaluation":
+                execution_result = await execute_feature_evaluation(
+                    session, request.modifications
+                )
         except Exception as e:
             return JSONResponse(
                 status_code=500,
@@ -1293,11 +1316,6 @@ async def submit_confirmation(request: UserConfirmationRequest):
                 }
             )
     
-    if stage == "model_evaluation" and status == ConfirmationStatus.SKIPPED:
-        workflow_state.transition_to(
-            WorkflowStage.COMPLETED,
-            message="Model evaluation skipped"
-        )
 
     # 提交响应
     try:
@@ -1340,7 +1358,6 @@ def _get_agent_for_stage(session: Dict, stage: str):
         "data_cleaning": "cleaning",
         "feature_engineering": "feature",
         "model_training": "model",
-        "model_evaluation": "evaluation",
     }
     agent_key = stage_agent_map.get(stage)
     if not agent_key:
@@ -1424,9 +1441,9 @@ async def revise_plan(request: PlanRevisionRequest):
     asset_manager = get_asset_manager(session_id=request.session_id)
     stage_asset_map = {
         "data_cleaning": ("cleaning", "cleaning_plan.md"),
-        "feature_engineering": ("features", "feature_plan.md"),
-        "model_training": ("models", "model_plan.md"),
-        "data_splitting": ("data", "split_plan.md"),
+        "feature_engineering": ("features", "feature_engineering_plan.md"),
+        "model_training": ("models", "model_training_plan.md"),
+        "data_splitting": ("analysis", "dataset_split_report.md"),
     }
     if stage in stage_asset_map:
         asset_type, filename = stage_asset_map[stage]
@@ -1447,7 +1464,6 @@ def _rerun_script_on_split(
     script_path: str,
     input_path: str,
     output_path: str,
-    train_path: str = None,
     timeout: int = 300,
 ) -> Dict:
     """直接 subprocess 执行已保存的 .py 脚本（不走 LLM），用于在 valid/test 上重跑清洗/特征工程代码。"""
@@ -1458,13 +1474,9 @@ def _rerun_script_on_split(
     if not os.path.exists(input_path):
         return {"success": False, "error": f"输入文件不存在: {input_path}"}
 
-    cmd = [sys.executable, script_path, input_path, output_path]
-    if train_path:
-        cmd.append(train_path)
-
     try:
         result = sp.run(
-            cmd,
+            [sys.executable, script_path, input_path, output_path],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1533,12 +1545,11 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
         script_path = str(asset_manager.session_dir / "code" / "cleaning.py")
         valid_raw = workflow_state.get_context("valid_raw_path")
         test_raw = workflow_state.get_context("test_raw_path")
-        train_raw = workflow_state.get_context("train_raw_path") or data_path
         data_dir = str(asset_manager.session_dir / "data")
 
         if valid_raw and os.path.exists(valid_raw):
             cleaned_valid_path = os.path.join(data_dir, "cleaned_valid.csv")
-            r = _rerun_script_on_split(script_path, valid_raw, cleaned_valid_path, train_path=train_raw)
+            r = _rerun_script_on_split(script_path, valid_raw, cleaned_valid_path)
             if r["success"]:
                 print(f"[API] valid 清洗完成: {cleaned_valid_path}")
                 workflow_state.set_context("cleaned_valid_path", cleaned_valid_path)
@@ -1548,7 +1559,7 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
 
         if test_raw and os.path.exists(test_raw):
             cleaned_test_path = os.path.join(data_dir, "cleaned_test.csv")
-            r = _rerun_script_on_split(script_path, test_raw, cleaned_test_path, train_path=train_raw)
+            r = _rerun_script_on_split(script_path, test_raw, cleaned_test_path)
             if r["success"]:
                 print(f"[API] test 清洗完成: {cleaned_test_path}")
                 workflow_state.set_context("cleaned_test_path", cleaned_test_path)
@@ -1566,6 +1577,7 @@ async def execute_data_cleaning(session: Dict, data_path: str, modifications: Op
         "cleaned_valid_path": cleaned_valid_path,
         "cleaned_test_path": cleaned_test_path,
         "original_path": data_path,
+        "generated_code": code,
         "timestamp": datetime.now().isoformat(),
         "stage": "data_cleaning"
     }
@@ -1840,12 +1852,11 @@ async def execute_feature_engineering(
         script_path = str(asset_manager.session_dir / "code" / "feature_engineering.py")
         cleaned_valid = workflow_state.get_context("cleaned_valid_path")
         cleaned_test = workflow_state.get_context("cleaned_test_path")
-        cleaned_train = workflow_state.get_context("cleaned_train_path")
         data_dir = str(asset_manager.session_dir / "data")
 
         if cleaned_valid and os.path.exists(cleaned_valid):
             features_valid_path = os.path.join(data_dir, "features_valid.csv")
-            r = _rerun_script_on_split(script_path, cleaned_valid, features_valid_path, train_path=cleaned_train)
+            r = _rerun_script_on_split(script_path, cleaned_valid, features_valid_path)
             if r["success"]:
                 print(f"[API] valid 特征工程完成: {features_valid_path}")
                 workflow_state.set_context("features_valid_path", features_valid_path)
@@ -1855,7 +1866,7 @@ async def execute_feature_engineering(
 
         if cleaned_test and os.path.exists(cleaned_test):
             features_test_path = os.path.join(data_dir, "features_test.csv")
-            r = _rerun_script_on_split(script_path, cleaned_test, features_test_path, train_path=cleaned_train)
+            r = _rerun_script_on_split(script_path, cleaned_test, features_test_path)
             if r["success"]:
                 print(f"[API] test 特征工程完成: {features_test_path}")
                 workflow_state.set_context("features_test_path", features_test_path)
@@ -1873,6 +1884,7 @@ async def execute_feature_engineering(
         "features_valid_path": features_valid_path,
         "features_test_path": features_test_path,
         "original_path": data_path,
+        "generated_code": code,
         "timestamp": datetime.now().isoformat(),
         "stage": "feature_engineering",
         "evaluation_available": file_exists,
@@ -1990,6 +2002,7 @@ async def execute_model_training(
         "selected_feature_names": result.get("selected_feature_names", []),
         "features_data_path": result.get("data_path"),
         "artifact_status": result.get("artifact_status", {}),
+        "generated_code": code,
         "timestamp": result.get("timestamp"),
         "stage": "model_training"
     }
@@ -2264,95 +2277,20 @@ async def generate_pipeline(session_id: str):
     pipeline_generator = PipelineGenerator(session_id=session_id)
     
     try:
-        script = pipeline_generator.generate_pipeline_script(
+        pipeline_dir = pipeline_generator.generate_pipeline_package(
             data_path=data_path,
             target_column=target_column,
             task_type=task_type
         )
-        
+
         return {
             "success": True,
-            "message": "全流程脚本已生成",
+            "message": "全流程 pipeline 包已生成",
+            "pipeline_dir": pipeline_dir,
             "download_url": f"/assets/{session_id}/code/pipeline.py"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/predict")
-async def predict(session_id: str, data_path: str, output_dir: str = None):
-    """使用已训练模型对新数据进行预测"""
-    import subprocess as sp
-
-    session = get_session(session_id)
-    workflow_state = session.get("workflow_state")
-    if not workflow_state:
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    asset_manager = get_asset_manager(session_id=session_id)
-
-    # 检查必需文件
-    pipeline_path = str(asset_manager.session_dir / "code" / "pipeline.py")
-    model_path = str(asset_manager.session_dir / "models" / "trained_model.pkl")
-    if not os.path.exists(pipeline_path):
-        raise HTTPException(status_code=400, detail="pipeline.py 不存在，请先调用 /pipeline/generate")
-    if not os.path.exists(model_path):
-        raise HTTPException(status_code=400, detail="trained_model.pkl 不存在，请先完成模型训练")
-    if not os.path.exists(data_path):
-        raise HTTPException(status_code=400, detail=f"输入数据不存在: {data_path}")
-
-    # 获取上下文参数
-    target_column = _get_effective_target_column(workflow_state)
-    train_raw_path = workflow_state.get_context("train_raw_path") or workflow_state.get_context("data_path")
-
-    # 输出目录
-    if not output_dir:
-        output_dir = str(asset_manager.session_dir / "predictions")
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 构建命令
-    cmd = [
-        sys.executable, pipeline_path,
-        "--mode", "predict",
-        "--data", os.path.abspath(data_path),
-        "--model", model_path,
-        "--output-dir", output_dir,
-        "--target", target_column,
-    ]
-    if train_raw_path and os.path.exists(train_raw_path):
-        cmd.extend(["--train-data", train_raw_path])
-
-    try:
-        result = sp.run(
-            cmd, capture_output=True, text=True,
-            timeout=600, cwd=os.path.dirname(pipeline_path),
-        )
-    except sp.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="预测超时 (600s)")
-
-    predictions_path = os.path.join(output_dir, "predictions.csv")
-    success = result.returncode == 0 and os.path.exists(predictions_path)
-
-    response = {
-        "success": success,
-        "predictions_path": predictions_path if success else None,
-        "stdout": result.stdout,
-        "timestamp": datetime.now().isoformat(),
-    }
-
-    if not success:
-        response["error"] = result.stderr.strip() if result.stderr else "预测失败"
-        raise HTTPException(status_code=500, detail=response)
-
-    # 统计预测记录数
-    try:
-        import pandas as pd
-        pred_df = pd.read_csv(predictions_path)
-        response["records"] = len(pred_df)
-    except Exception:
-        pass
-
-    return response
 
 
 # ==================== Session CRUD ====================
@@ -2436,6 +2374,129 @@ async def get_session_detail(session_id: str):
     }
 
 
+@app.get("/sessions/{session_id}/restore")
+async def restore_session(session_id: str):
+    """恢复会话，返回前端重建 UI 所需的全部数据"""
+    session = get_session(session_id)
+    ws = session.get("workflow_state")
+    if not ws:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    cm: Optional[ConfirmationManager] = session.get("confirmation_manager")
+    asset_manager = get_asset_manager(session_id=session_id)
+
+    # --- 阶段顺序 ---
+    stage_keys = [
+        "data_upload", "problem_definition", "data_contract_check",
+        "data_splitting", "data_cleaning", "data_exploration",
+        "feature_engineering", "model_training",
+    ]
+
+    # --- 根据 confirmation history 重建 stage_data 和 stage_status ---
+    stage_data: Dict[str, Any] = {}
+    stage_status: Dict[str, str] = {}
+
+    if cm:
+        all_points = cm.history + ([cm.current] if cm.current else []) + cm._queue
+        # 对每个阶段，取最新的 confirmation point
+        stage_points: Dict[str, UserConfirmationPoint] = {}
+        for p in all_points:
+            stage_points[p.stage] = p  # 后面的覆盖前面的（更新）
+
+        for stage_key, point in stage_points.items():
+            sd: Dict[str, Any] = {
+                "proposal": point.proposal_content,
+                "confirmation_id": point.id,
+                "modifiable_aspects": point.modifiable_aspects,
+            }
+            # 合并 metadata 中的额外字段（如 problem_definition, modelable 等）
+            if point.metadata:
+                for k, v in point.metadata.items():
+                    if k not in ("stage",):
+                        sd[k] = v
+            # skills_referenced
+            if point.skills_referenced:
+                sd["skills_referenced"] = [
+                    {"skill_name": s.skill_name, "skill_path": s.skill_path, "reference_file": s.reference_file}
+                    for s in point.skills_referenced
+                ]
+
+            if point.is_resolved():
+                sd["requires_confirmation"] = False
+                stage_status[stage_key] = "completed"
+            elif point.is_rejected():
+                sd["requires_confirmation"] = False
+                stage_status[stage_key] = "error"
+            else:
+                sd["requires_confirmation"] = True
+                stage_status[stage_key] = "pending"
+
+            stage_data[stage_key] = sd
+
+    # 补充 data_upload 阶段状态（没有 confirmation point）
+    if ws.get_context("data_path"):
+        stage_status.setdefault("data_upload", "completed")
+
+    # --- 重建 generated_code（从磁盘读取） ---
+    generated_code: Dict[str, str] = {}
+    code_dir = asset_manager.session_dir / "code"
+    code_file_map = {
+        "data_cleaning": "cleaning.py",
+        "feature_engineering": "feature_engineering.py",
+        "model_training": "model_training.py",
+    }
+    for stage_key, filename in code_file_map.items():
+        code_file = code_dir / filename
+        if code_file.exists():
+            try:
+                generated_code[stage_key] = code_file.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+    # --- 资产列表 ---
+    assets_data = []
+    try:
+        assets_data = asset_manager.get_all_download_urls()
+    except Exception:
+        pass
+
+    # --- 当前阶段索引 ---
+    current_stage_value = ws.current_stage.value if ws.current_stage else "data_upload"
+    current_stage_index = len(stage_keys) - 1  # 默认最后一个阶段（completed/error 等未列出的阶段）
+    for i, sk in enumerate(stage_keys):
+        if sk == current_stage_value:
+            current_stage_index = i
+            break
+
+    # --- 待处理的确认 ---
+    pending_confirmation = None
+    if cm:
+        current = cm.current
+        if not current:
+            pending = cm.get_pending_points()
+            current = pending[0] if pending else None
+        if current and not current.is_resolved():
+            pending_confirmation = {
+                "confirmation_id": current.id,
+                "stage": current.stage,
+            }
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "current_stage": current_stage_value,
+        "context": ws.context,
+        "history": ws.history[-20:],
+        "stage_data": stage_data,
+        "stage_status": stage_status,
+        "generated_code": generated_code,
+        "assets": assets_data,
+        "current_stage_index": current_stage_index,
+        "pending_confirmation": pending_confirmation,
+        "created_at": session.get("created_at", ""),
+    }
+
+
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, confirm: bool = False):
     """删除会话及所有关联资产"""
@@ -2475,6 +2536,131 @@ async def get_report_summary(session_id: str):
         return json.loads(summary_json)
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="摘要报告格式错误")
+
+
+# ==================== Upload ====================
+
+@app.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = None,
+):
+    """上传数据文件到会话资产目录"""
+    if not session_id:
+        session_id = f"session_{int(datetime.now().timestamp() * 1000)}"
+
+    dest = _get_session_original_data_path(session_id)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+
+    _save_data_onboarding_artifacts(session_id, dest, file.filename or "uploaded_file")
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "filename": file.filename,
+        "file_path": str(dest),
+        "file_size": len(content),
+    }
+
+
+# ==================== Predict ====================
+
+@app.post("/predict")
+async def predict_run(session_id: str, data_path: str, output_dir: str = None):
+    """使用已训练模型对新数据进行预测"""
+    import subprocess as sp
+
+    session = get_session(session_id)
+    workflow_state = session.get("workflow_state")
+    if not workflow_state:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    asset_manager = get_asset_manager(session_id=session_id)
+
+    pipeline_path = str(asset_manager.session_dir / "code" / "pipeline.py")
+    model_path = str(asset_manager.session_dir / "models" / "trained_model.pkl")
+    if not os.path.exists(pipeline_path):
+        raise HTTPException(status_code=400, detail="pipeline.py 不存在，请先调用 /pipeline/generate")
+    if not os.path.exists(model_path):
+        raise HTTPException(status_code=400, detail="trained_model.pkl 不存在，请先完成模型训练")
+    if not os.path.exists(data_path):
+        raise HTTPException(status_code=400, detail=f"输入数据不存在: {data_path}")
+
+    target_column = _get_effective_target_column(workflow_state)
+    train_raw_path = workflow_state.get_context("train_raw_path") or workflow_state.get_context("data_path")
+
+    if not output_dir:
+        output_dir = str(asset_manager.session_dir / "predictions")
+    os.makedirs(output_dir, exist_ok=True)
+
+    cmd = [
+        sys.executable, pipeline_path,
+        "--mode", "predict",
+        "--data", os.path.abspath(data_path),
+        "--model", model_path,
+        "--output-dir", output_dir,
+        "--target", target_column,
+    ]
+    if train_raw_path and os.path.exists(train_raw_path):
+        cmd.extend(["--train-data", train_raw_path])
+
+    try:
+        result = sp.run(cmd, capture_output=True, text=True, timeout=600, cwd=os.path.dirname(pipeline_path))
+    except sp.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="预测超时 (600s)")
+
+    predictions_path = os.path.join(output_dir, "predictions.csv")
+    success = result.returncode == 0 and os.path.exists(predictions_path)
+
+    response = {
+        "success": success,
+        "predictions_path": predictions_path if success else None,
+        "stdout": result.stdout,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    if not success:
+        response["error"] = result.stderr.strip() if result.stderr else "预测失败"
+        raise HTTPException(status_code=500, detail=response)
+
+    try:
+        import pandas as pd
+        pred_df = pd.read_csv(predictions_path)
+        response["records"] = len(pred_df)
+    except Exception:
+        pass
+
+    return response
+
+
+@app.post("/predict/upload")
+async def predict_upload(
+    file: UploadFile = File(...),
+    session_id: str = None,
+    output_dir: str = None,
+):
+    """上传数据文件并使用已训练模型进行预测"""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id 不能为空")
+
+    asset_manager = get_asset_manager(session_id=session_id)
+    predict_dir = asset_manager.session_dir / "predictions"
+    predict_dir.mkdir(parents=True, exist_ok=True)
+
+    upload_path = predict_dir / (file.filename or "predict_input.csv")
+    content = await file.read()
+    with open(upload_path, "wb") as f:
+        f.write(content)
+
+    return await predict_run(
+        session_id=session_id,
+        data_path=str(upload_path),
+        output_dir=output_dir,
+    )
 
 
 # ==================== TTL Cleanup ====================
