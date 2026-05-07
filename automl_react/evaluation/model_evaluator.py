@@ -314,6 +314,7 @@ def predict_from_artifact(artifact, features, expected_feature_names, inferred_t
     if isinstance(artifact, dict) and "model" in artifact:
         model = artifact["model"]
         preprocessor = artifact.get("preprocessor")
+        categorical_mappings = artifact.get("categorical_mappings")
         aligned_features, alignment_info = align_features(features, expected_feature_names, model, artifact)
         target_transform, target_transform_source = resolve_target_transform(artifact, inferred_target_transform)
 

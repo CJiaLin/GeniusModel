@@ -6,6 +6,7 @@
 
 import json
 import os
+import re
 import pickle
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
@@ -68,6 +69,50 @@ class ModelTrainingAgent(ReActAgent):
             "test_split_path": str(session_dir / "data" / "features_test.csv"),
             "training_summary_path": str(session_dir / "models" / "training_summary.json")
         }
+
+    def _summarize_report(self, report: str, max_chars: int = 4000, priority_keywords: List[str] = None) -> str:
+        """从 Markdown 报告中按优先级提取章节，避免暴力截断。
+
+        策略：按 ## 标题拆分章节，优先保留包含 priority_keywords 的章节，
+        剩余预算填充其他章节。确保不会截断表格或列表中间。
+        """
+        if not report or len(report) <= max_chars:
+            return report
+
+        priority_keywords = priority_keywords or []
+
+        # 按 ## 标题拆分
+        parts = re.split(r'\n(##\s+[^\n]+)', report)
+        # parts: [header, '## title1', 'body1', '## title2', 'body2', ...]
+        header = parts[0].strip()
+        sections = []
+        for i in range(1, len(parts) - 1, 2):
+            title = parts[i].strip()
+            body = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            sections.append((title, body))
+
+        kept = [header]
+        remaining_budget = max_chars - len(header) - 10
+
+        # 第一轮：纳入高优先级章节
+        included_indices = set()
+        for idx, (title, body) in enumerate(sections):
+            if any(kw in title for kw in priority_keywords):
+                section_text = f"\n\n{title}\n\n{body}"
+                if len(section_text) <= remaining_budget:
+                    kept.append(section_text)
+                    remaining_budget -= len(section_text)
+                    included_indices.add(idx)
+
+        # 第二轮：剩余预算填充其他章节
+        for idx, (title, body) in enumerate(sections):
+            if idx not in included_indices:
+                section_text = f"\n\n{title}\n\n{body}"
+                if len(section_text) <= remaining_budget:
+                    kept.append(section_text)
+                    remaining_budget -= len(section_text)
+
+        return "".join(kept)
 
     def _read_training_summary(self, summary_path: str) -> Dict[str, Any]:
         """读取训练摘要文件。"""
@@ -647,21 +692,32 @@ if __name__ == "__main__":
 """
         self.task_context = task_context
 
+        # 从 workflow_config 读取摘要限额
+        summarization_config = self.config_loader.load_workflow_config().get("summarization", {})
+        exploration_max = summarization_config.get("exploration_report_max_chars", 4000)
+        feature_max = summarization_config.get("feature_report_max_chars", 3500)
+
         exploration_report_context = ""
         if exploration_report:
+            summarized = self._summarize_report(exploration_report, max_chars=exploration_max, priority_keywords=[
+                "目标变量", "特征相关性", "相关性分析", "特征重要性", "特征工程建议", "下一步建议",
+            ])
             exploration_report_context = f"""
     ## 探索性分析报告（来自数据探索阶段）
 
-    {exploration_report[:2200]}
+    {summarized}
 
     """
 
         feature_report_context = ""
         if feature_metrics_report:
+            summarized = self._summarize_report(feature_metrics_report, max_chars=feature_max, priority_keywords=[
+                "IV", "Information Value", "特征重要性", "相关性", "建议", "结论",
+            ])
             feature_report_context = f"""
 ## 特征分析报告（来自特征评估阶段）
 
-{feature_metrics_report[:2500]}
+{summarized}
 
 """
 

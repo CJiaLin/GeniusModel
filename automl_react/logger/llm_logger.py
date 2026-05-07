@@ -366,13 +366,12 @@ class LLMLogger:
         }
 
 
-# 全局 LLMLogger 实例
-_llm_loggers: Dict[str, LLMLogger] = {}
+# 全局便捷入口 — 委托到 AppRegistry 默认实例
 
 
 def get_llm_logger(log_dir: str = None, session_id: str = None) -> LLMLogger:
     """
-    获取 LLMLogger 实例
+    获取 LLMLogger 实例（委托到 AppRegistry）。
 
     Args:
         log_dir: 日志保存根目录
@@ -381,10 +380,11 @@ def get_llm_logger(log_dir: str = None, session_id: str = None) -> LLMLogger:
     Returns:
         LLMLogger 实例
     """
-    if session_id is None:
-        session_id = "default"
+    from automl_react.api.registry import _default_registry
+    return _default_registry.get_llm_logger(session_id or "default", log_dir)
 
-    if session_id not in _llm_loggers:
-        _llm_loggers[session_id] = LLMLogger(log_dir, session_id)
 
-    return _llm_loggers[session_id]
+def remove_llm_logger(session_id: str) -> None:
+    """从全局注册表中移除 LLMLogger 实例，释放内存。"""
+    from automl_react.api.registry import _default_registry
+    _default_registry.remove_llm_logger(session_id)

@@ -284,7 +284,7 @@ feature_engineering:
 
   plan_generation: |
     <task_definition>
-    基于当前数据事实和前序分析结果，生成一份特征工程方案。
+    基于当前数据事实和前序分析结果，生成一份**全面深入**的特征工程方案。目标是充分挖掘数据中的预测信号，通过丰富的特征衍生和交叉组合提升模型表现。
     </task_definition>
 
     <context>
@@ -297,19 +297,32 @@ feature_engineering:
 
     <reasoning_steps>
     请按以下步骤推理：
-    1. **学习领域知识（必做）**：直接使用 `read_skill` 工具（不要用 search_skills）读取 `afrexai-ml-engineering-1.0.0` 的 `phase2-data-engineering` 章节，获取完整的特征工程范式和最佳实践后再进行方案设计
-    2. 先使用 `load_data` 或 `analyze_data` 对 `{data_path}` 做实时校验，确认列名和数据规模
-    3. 比对前序探索阶段的分析结论，结合 skill 知识识别高价值特征和需要变换的特征
-    4. 对每个变换评估：是否增加预测信号？采用”替换式”还是”追加式”？
-    5. 检查方案是否保持目标变量不变
+    1. **学习领域知识（必做）**：直接使用 `read_skill` 工具读取以下两个 skill 的全部章节：
+       - `afrexai-ml-engineering-1.0.0` 的 `phase2-data-engineering` 章节
+       - `feature-engineering-patterns-1.0.0` 的全部 4 个章节（numeric-transforms、categorical-encoding、datetime-features、interaction-features）
+       阅读完成后再进行方案设计，确保方案覆盖 skill 中提到的各类特征工程模式
+    2. 基于上方 `<verified_facts>` 和 `当前数据基本信息` 中已提供的列名和数据规模进行方案设计（无需再调用 analyze_data 重复获取）
+    3. 比对前序探索阶段的分析结论，全面识别所有可参与特征工程的列
+    4. **系统性设计特征衍生**：参照 skill 中的各模式，对所有有业务含义的列逐一评估是否适用，确保每种适用的模式都被充分利用
+    5. 对每个变换评估：是否增加预测信号？采用”替换式”还是”追加式”？
+    6. 检查方案是否保持目标变量不变
     </reasoning_steps>
+
+    <feature_quantity_guidance>
+    **数量与覆盖度要求：**
+    - 方案中新生成的特征数量应不少于原始特征数量的 50%（如原始数据有 N 个特征列，请确保至少衍生 N/2 个新特征）
+    - 必须覆盖 skill 中的多种模式类型（不能只做编码或只做交叉中的一种）
+    - 对于数值列，至少从”变换”和”交叉”两个角度各生成特征
+    - 对于分类列，至少从”编码”和”分组聚合”两个角度各生成特征
+    - 不要因为”担心维度过高”而过于保守——后续模型训练阶段有特征选择能力，宁可多生成特征再由模型筛选
+    </feature_quantity_guidance>
 
     <output_format>
     请输出 Markdown 格式的特征工程方案，必须包含：
-    1. 现有特征分析
-    2. 特征工程策略
-    3. 要生成的新特征列表
-    4. 预期效果
+    1. 现有特征分析（列出所有列的类型和分布特点）
+    2. 特征工程策略总览（覆盖上述哪些维度）
+    3. 要生成的新特征详细列表（每个新特征注明：名称、计算方式、来源列）
+    4. 预期效果（预计新增特征数量、对模型的预期增益）
     5. 变换与训练阶段衔接说明
     </output_format>
 
@@ -320,6 +333,7 @@ feature_engineering:
     4. 对数化/归一化/标准化等变换必须明确写清是”替换式”（删除原始列）还是”追加式”（保留原始列），避免重复进入训练
     5. 特征工程阶段不对目标变量做任何变换（对数化、归一化、标准化等），目标变量保持原始值——目标变量变换由模型训练阶段自行决定
     6. 优先参考前序阶段已完成的执行结果，尤其是数据探索阶段的分析结论
+    7. 不要因为”担心维度过高”而过于保守——后续模型训练阶段有特征选择能力，宁可多生成特征再由模型筛选，不要遗漏有潜力的特征
     </constraints>
 
     <verified_facts>
@@ -369,6 +383,29 @@ feature_engineering:
     - **只输出 Python 代码块，不要输出解释文字。**
     </output_contract>
 
+    <implementation_strategy>
+    根据特征工程方案中的实现方式选择对应的代码实现策略：
+
+    **如果用户建模背景中明确要求使用 sqlite/SQLite 进行特征加工，或方案中使用 SQL 语法描述特征变换（含 SELECT/CASE WHEN/julianday 等 SQL 关键词），必须使用 SQLite 实现：**
+    - 使用 Python 标准库 sqlite3 创建内存数据库（`:memory:`）
+    - 用 pandas 读取 CSV 后通过 df.to_sql() 载入 SQLite 表
+    - 将方案中的 SQL 片段组装为完整的 SELECT 语句执行特征变换
+    - 用 pd.read_sql() 读回变换结果并保存为 CSV
+    - 示例模式：
+      ```
+      import sqlite3
+      conn = sqlite3.connect(":memory:")
+      df.to_sql("data", conn, index=False)
+      sql = "SELECT *, <feature_expressions> FROM data"
+      result = pd.read_sql(sql, conn)
+      conn.close()
+      ```
+    - SQLite 不支持 LOG() 函数，需注册自定义函数：conn.create_function("LOG", 1, math.log)
+    - 列名含特殊字符（如 `capital-gains`）需用双引号包裹
+
+    **仅当用户未要求 sqlite 且方案中未使用 SQL 语法时，使用 pandas/numpy 实现。**
+    </implementation_strategy>
+
     <reusability>
     此代码将被复用于验证集和测试集（通过不同参数调用 engineer_features 函数）。因此：
     - 所有基于训练数据的统计量（目标编码均值、频率阈值等）必须从 train_path 指向的训练集动态计算，不得在代码中硬编码数字常量
@@ -384,6 +421,7 @@ feature_engineering:
     - 避免原始列和变换后列同时保留导致重复特征
     - 目标变量不做任何变换，保持原始值输出——变换由模型训练阶段决定
     - 如果数据中存在 Id/ID/index 等标识列，必须在输出文件中保留
+    - SQLite 实现时注意：julianday() 要求日期格式为 YYYY-MM-DD，需确认数据中日期列格式
     </common_pitfalls>
 
 
@@ -659,7 +697,7 @@ model_training:
     1. 训练集、验证集、测试集已经过相同的清洗和特征工程预处理，列结构一致，通过函数参数 train_path/valid_path/test_path 接收
     2. 默认使用除目标列外的所有特征，仅排除方案中明确列出的排除项（常量列、泄露特征）；必须排除 Id/ID/index 等行标识列
     3. 不得重新切分数据，直接消费传入的三个文件
-    4. 输入数据来自特征工程阶段的输出，所有分类变量已完成编码，不得在 preprocessor 中再次做编码变换。preprocessor 仅用于数值特征的缩放（如 StandardScaler），若不需要缩放可设为 None
+    4. 如果输入数据中仍存在 object/string 类型列需要处理（编码、缩放等），必须将所有预处理步骤封装为一个 sklearn Pipeline 或 ColumnTransformer 对象，作为 artifact dict 中的 "preprocessor" 保存。预测阶段会对新数据调用 preprocessor.transform()，因此 preprocessor 必须能独立完成从原始特征到模型输入的全部变换（编码 + 缩放）
     5. valid 只用于模型选择与调参，test 只用于最终评估
     6. 若某个文件不存在或为空，安全跳过并记录日志
 

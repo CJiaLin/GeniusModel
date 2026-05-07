@@ -480,6 +480,10 @@ class CodeActAgent:
             required_output_names=required_output_names or [],
         )
 
+        # 将执行输出通过回调发送给前端
+        if self._stream_callback and result.output:
+            self._stream_callback(StreamEvent(StreamEventType.EXECUTION_OUTPUT, result.output))
+
         if result.success:
             return {
                 "success": True,
@@ -521,6 +525,9 @@ class CodeActAgent:
                     del local_vars[key]
 
             output = stdout_buf.getvalue() or "代码执行成功"
+            # 将执行输出通过回调发送给前端
+            if self._stream_callback and stdout_buf.getvalue():
+                self._stream_callback(StreamEvent(StreamEventType.EXECUTION_OUTPUT, stdout_buf.getvalue()))
             return {
                 "success": True,
                 "output": output,

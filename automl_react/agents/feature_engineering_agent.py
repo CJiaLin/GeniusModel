@@ -169,15 +169,15 @@ class FeatureEngineeringAgent(ReActAgent):
 - **目标列唯一值数量**: {self.data_info['target_unique']}
 - **任务类型**: {task_type}
 
-## 数值列
+## 数值列（共 {len(self.data_info['numeric_columns'])} 个）
 
-{', '.join(self.data_info['numeric_columns'][:20])}
+{', '.join(self.data_info['numeric_columns'])}
 
-## 分类列
+## 分类列（共 {len(self.data_info['categorical_columns'])} 个）
 
-{', '.join(self.data_info['categorical_columns'][:20])}
+{', '.join(self.data_info['categorical_columns'])}
 
-重要：请基于上述实际数据列名和前序阶段的分析结果生成方案。
+重要：请基于上述实际数据列名和前序阶段的分析结果生成方案，充分利用所有可用列进行特征衍生和交叉组合。
 """
 
             # 用于强约束 LLM 的“事实快照”，避免被前序文本污染。

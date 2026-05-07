@@ -1,14 +1,15 @@
 [project]
-name = "automl-agent"
-version = "0.1.0"
-description = "基于LangChain的智能AutoML建模Agent"
+name = "genius-model"
+version = "1.0.0"
+description = "GeniusModel - 基于 ReAct Agent 架构的交互式智能建模系统"
 requires-python = ">=3.9"
 dependencies = [
-    # Core ML & Data
-    "langchain>=0.1.0",
+    # LLM & Agent
     "langchain-core>=0.1.0",
-    "langgraph>=0.0.20",
     "langchain-openai>=0.0.5",
+    "langchain-anthropic>=0.1.0",
+    "tiktoken>=0.5.0",
+    # Data & ML
     "pandas>=2.1.0",
     "numpy>=1.26.0",
     "scikit-learn>=1.4.0",
@@ -20,7 +21,6 @@ dependencies = [
     # Utilities
     "pydantic>=2.5.0",
     "pyyaml>=6.0",
-    "tiktoken>=0.5.0",
     # Visualization
     "matplotlib>=3.8.0",
     "seaborn>=0.13.0",

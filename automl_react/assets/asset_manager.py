@@ -162,8 +162,15 @@ class AssetManager:
 
         Returns:
             资产文件路径
+
+        Raises:
+            ValueError: 路径遍历检测到非法路径
         """
-        return self.session_dir / asset_type / filename
+        asset_path = (self.session_dir / asset_type / filename).resolve()
+        # 防止目录遍历攻击
+        if not str(asset_path).startswith(str(self.session_dir.resolve())):
+            raise ValueError(f"非法路径: {asset_type}/{filename}")
+        return asset_path
 
     def save_data(
         self,
@@ -517,13 +524,12 @@ class AssetManager:
         return urls
 
 
-# 全局 AssetManager 实例
-_asset_managers: Dict[str, AssetManager] = {}
+# 全局便捷入口 — 委托到 AppRegistry 默认实例
 
 
 def get_asset_manager(base_dir: str = None, session_id: str = None) -> AssetManager:
     """
-    获取 AssetManager 实例
+    获取 AssetManager 实例（委托到 AppRegistry）。
 
     Args:
         base_dir: 资产保存根目录
@@ -532,10 +538,11 @@ def get_asset_manager(base_dir: str = None, session_id: str = None) -> AssetMana
     Returns:
         AssetManager 实例
     """
-    if session_id is None:
-        session_id = "default"
+    from automl_react.api.registry import _default_registry
+    return _default_registry.get_asset_manager(session_id or "default", base_dir)
 
-    if session_id not in _asset_managers:
-        _asset_managers[session_id] = AssetManager(base_dir, session_id)
 
-    return _asset_managers[session_id]
+def remove_asset_manager(session_id: str) -> None:
+    """从全局注册表中移除 AssetManager 实例，释放内存。"""
+    from automl_react.api.registry import _default_registry
+    _default_registry.remove_asset_manager(session_id)

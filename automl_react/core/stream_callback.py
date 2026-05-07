@@ -14,6 +14,7 @@ class StreamEventType(Enum):
     CONTENT = "content"
     PROGRESS = "progress"
     CODE_GENERATED = "code_generated"
+    EXECUTION_OUTPUT = "execution_output"
     DONE = "done"
     ERROR = "error"
 

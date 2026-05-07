@@ -65,6 +65,11 @@ logging:
   save_llm_calls: true
   save_workflow_transitions: true
 
+# 报告摘要配置（模型训练阶段引用前序报告时的截断限额）
+summarization:
+  exploration_report_max_chars: 4000
+  feature_report_max_chars: 3500
+
 # 沙盒执行配置
 execution:
   sandbox_mode: "subprocess"

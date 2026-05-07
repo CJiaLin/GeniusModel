@@ -1,33 +1,36 @@
 """
 全流程脚本生成器模块
 
-生成可独立运行的多文件 pipeline 包，支持 train 和 predict 两种模式。
+生成 pipeline.py 编排脚本，保存到 code/ 目录（与各阶段代码同目录）。
 """
 
 import json
-import re
 from typing import Any, Dict, Optional
 from datetime import datetime
 from pathlib import Path
 
+import joblib
+import pandas as pd
+from sklearn.pipeline import Pipeline as SklearnPipeline
+
 from ..assets import get_asset_manager
+from .sklearn_wrappers import DataFrameStageTransformer, TargetColumnSplitter, ModelStepWrapper
 
 
 class PipelineGenerator:
     """
     全流程脚本生成器
 
-    收集各阶段代码，组装为多文件 pipeline 包。
-    生成的 pipeline/ 目录包含：
-      - pipeline.py   — 编排脚本（入口）
+    生成 pipeline.py 编排脚本到 code/ 目录，与各阶段代码文件同目录：
       - cleaning.py   — 数据清洗函数
       - feature_engineering.py — 特征工程函数
       - model_training.py — 模型训练函数
       - model_evaluation.py — 模型评估函数
+      - pipeline.py   — 编排脚本（入口）
 
     使用说明:
-      python pipeline/pipeline.py --mode train --data raw_data.csv
-      python pipeline/pipeline.py --mode predict --data new_data.csv --model output/model.pkl
+      python code/pipeline.py --mode train --data raw_data.csv
+      python code/pipeline.py --mode predict --data new_data.csv --model output/model.pkl
     """
 
     def __init__(self, session_id: str = None):
@@ -48,19 +51,6 @@ class PipelineGenerator:
             if code:
                 stages[stage] = code
         return stages
-
-    # ------------------------------------------------------------------
-    # 代码提取辅助
-    # ------------------------------------------------------------------
-
-    def _extract_core_code(self, code: str) -> str:
-        """从代码中提取核心逻辑（去除 markdown 围栏）"""
-        code_blocks = re.findall(r'```python\n(.*?)\n```', code, re.DOTALL)
-        if not code_blocks:
-            code_blocks = re.findall(r'```\n(.*?)\n```', code, re.DOTALL)
-        core = code_blocks[0] if code_blocks else code
-        lines = [line for line in core.splitlines() if not line.strip().startswith("```")]
-        return "\n".join(lines).strip() + "\n"
 
     def _load_split_config(self) -> Dict[str, Any]:
         """从 session 资产读取切分配置。"""
@@ -88,39 +78,21 @@ class PipelineGenerator:
         task_type: str = "regression",
     ) -> str:
         """
-        生成可分发的多文件 pipeline 目录。
+        生成 pipeline.py 编排脚本，保存到 code/ 目录。
 
         Returns:
-            pipeline 目录路径
+            code 目录路径
         """
         stage_codes = self.collect_stage_codes()
         split_config = self._load_split_config()
 
-        pipeline_dir = self.asset_manager.session_dir / "pipeline"
-        pipeline_dir.mkdir(parents=True, exist_ok=True)
-
-        # 1. 复制各阶段代码文件（去除 markdown 围栏）
-        stage_files = [
-            ("data_cleaning", "cleaning.py"),
-            ("feature_engineering", "feature_engineering.py"),
-            ("model_training", "model_training.py"),
-            ("model_evaluation", "model_evaluation.py"),
-        ]
-        for stage, filename in stage_files:
-            if stage in stage_codes:
-                code = self._extract_core_code(stage_codes[stage])
-                (pipeline_dir / filename).write_text(code, encoding="utf-8")
-
-        # 2. 生成 pipeline.py 编排器
+        # 生成 pipeline.py 编排器，保存到 code/ 目录
         orchestrator = self._generate_orchestrator(
             target_column=target_column,
             task_type=task_type,
             split_config=split_config,
             has_evaluation="model_evaluation" in stage_codes,
         )
-        (pipeline_dir / "pipeline.py").write_text(orchestrator, encoding="utf-8")
-
-        # 3. 同时保存一份单文件版到 code/pipeline.py（兼容旧接口）
         self.asset_manager.save_code(
             code=orchestrator,
             filename="pipeline.py",
@@ -130,11 +102,11 @@ class PipelineGenerator:
                 "target_column": target_column,
                 "task_type": task_type,
                 "timestamp": datetime.now().isoformat(),
-                "pipeline_dir": str(pipeline_dir),
             }
         )
 
-        return str(pipeline_dir)
+        code_dir = str(self.asset_manager.session_dir / "code")
+        return code_dir
 
     def _generate_orchestrator(
         self,
@@ -405,9 +377,9 @@ if __name__ == "__main__":
         target_column: str,
         task_type: str = "regression",
     ) -> str:
-        """兼容旧接口：生成 pipeline 包并返回编排脚本内容。"""
-        pipeline_dir = self.generate_pipeline_package(data_path, target_column, task_type)
-        return (Path(pipeline_dir) / "pipeline.py").read_text(encoding="utf-8")
+        """兼容旧接口：生成 pipeline 并返回编排脚本内容。"""
+        self.generate_pipeline_package(data_path, target_column, task_type)
+        return self.asset_manager.read_asset("code", "pipeline.py")
 
     def get_pipeline_script(self) -> Optional[str]:
         """获取已生成的全流程脚本"""
@@ -424,3 +396,60 @@ if __name__ == "__main__":
             }
         )
         return {"success": True, "path": result.path, "size": result.size}
+
+    # ------------------------------------------------------------------
+    # sklearn Pipeline 生成
+    # ------------------------------------------------------------------
+
+    def generate_sklearn_pipeline(
+        self,
+        data_path: str,
+        target_column: str,
+        task_type: str = "regression",
+    ) -> str:
+        """
+        将各阶段代码组装为 sklearn Pipeline 并序列化。
+
+        将 cleaning、feature_engineering 函数包装为自定义 Transformer，
+        加上训练好的模型，组装为一个可直接 predict 的 Pipeline 对象。
+
+        Args:
+            data_path: 原始训练数据路径（用于 fit 时 bake 训练引用）
+            target_column: 目标列名
+            task_type: 任务类型
+
+        Returns:
+            序列化后的 Pipeline 文件路径
+        """
+        # 1. 读取各阶段源码
+        cleaning_source = self.asset_manager.read_asset("code", "cleaning.py")
+        fe_source = self.asset_manager.read_asset("code", "feature_engineering.py")
+
+        if not cleaning_source or not fe_source:
+            raise ValueError("缺少 cleaning.py 或 feature_engineering.py，无法组装 Pipeline")
+
+        # 2. 加载已训练模型 artifact
+        model_path = self.asset_manager.session_dir / "models" / "trained_model.pkl"
+        if not model_path.exists():
+            raise ValueError(f"模型文件不存在: {model_path}")
+        model_artifact = joblib.load(model_path)
+
+        # 3. 组装 Pipeline
+        steps = [
+            ("cleaning", DataFrameStageTransformer(cleaning_source, "clean_data", "cleaning")),
+            ("feature_engineering", DataFrameStageTransformer(fe_source, "engineer_features", "feature_engineering")),
+            ("drop_target", TargetColumnSplitter(target_column)),
+            ("model", ModelStepWrapper(model_artifact, target_column, task_type)),
+        ]
+        pipeline = SklearnPipeline(steps)
+
+        # 4. 用原始训练数据 fit（bake 训练引用到各 transformer 中）
+        raw_train_df = pd.read_csv(data_path)
+        pipeline.fit(raw_train_df)
+
+        # 5. 序列化
+        output_path = self.asset_manager.session_dir / "models" / "sklearn_pipeline.pkl"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(pipeline, output_path)
+
+        return str(output_path)

@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AutoML 交互式建模平台</title>
+    <title>GeniusModel 交互式建模平台</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
@@ -144,6 +145,10 @@
         .code-preview-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #f8f9fa; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text); user-select: none; }
         .code-preview-header:hover { background: #eef0f2; }
         .code-preview-header i { font-size: 11px; color: var(--text-secondary); width: 12px; }
+        .execution-output { border: 1px solid #2d3748; border-radius: 8px; overflow: hidden; margin-top: 8px; }
+        .execution-output-header { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: #2d3748; color: #e2e8f0; font-size: 13px; font-weight: 500; }
+        .execution-output-header i { color: #68d391; }
+        .execution-output-content { margin: 0; padding: 12px 14px; background: #1a202c; color: #e2e8f0; font-family: 'Menlo', 'Monaco', 'Consolas', monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow-y: auto; }
         .code-preview pre { margin: 0; padding: 14px; background: #fafbfc; max-height: 500px; overflow: auto; font-size: 12.5px; line-height: 1.6; border-top: 1px solid var(--border); }
         .code-preview pre code { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
 
@@ -226,7 +231,7 @@
 
     <!-- Header -->
     <header class="app-header">
-        <div class="logo"><i class="fas fa-robot"></i> AutoML Platform</div>
+        <div class="logo"><i class="fas fa-robot"></i> GeniusModel</div>
         <div class="nav-tabs">
             <button v-for="tab in tabs" :key="tab.key" :class="['nav-tab', { active: activeTab === tab.key }]" @click="activeTab = tab.key">
                 <i :class="tab.icon" style="margin-right:4px"></i> {{ tab.label }}
@@ -353,13 +358,13 @@
                             <div class="pd-item"><div class="pd-label">主要指标</div><div class="pd-value">{{ stageData.problem_definition.problem_definition.primary_metric }}</div></div>
                         </div>
                         <div v-if="stageData.problem_definition.proposal" class="md-content" style="margin-top:16px" v-html="renderMd(stageData.problem_definition.proposal)"></div>
-                        <div v-if="stageData.problem_definition.requires_confirmation" class="confirm-bar">
+                        <div v-if="stageData.problem_definition.requires_confirmation && stageStatus.problem_definition !== 'completed'" class="confirm-bar">
                             <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
                             <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
                             <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
                             <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
                         </div>
-                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                        <revision-panel v-if="showRevision && stageStatus.problem_definition !== 'completed'" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
                     </template>
                 </div>
 
@@ -383,7 +388,7 @@
                             <h4 style="font-size:14px;margin-bottom:8px"><i class="fas fa-exclamation-triangle" style="color:var(--warning)"></i> 风险项</h4>
                             <ul class="pd-list"><li v-for="r in stageData.data_contract_check.risk_list" :key="r">{{ r }}</li></ul>
                         </div>
-                        <div v-if="stageData.data_contract_check.requires_confirmation" class="confirm-bar">
+                        <div v-if="stageData.data_contract_check.requires_confirmation && stageStatus.data_contract_check !== 'completed'" class="confirm-bar">
                             <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
                             <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
                             <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
@@ -414,13 +419,13 @@
                         <div v-if="stageData.data_splitting.warnings && stageData.data_splitting.warnings.length" style="margin-top:12px;padding:10px;background:#fef3c7;border-radius:6px">
                             <p v-for="w in stageData.data_splitting.warnings" :key="w" style="font-size:13px;color:#92400e"><i class="fas fa-exclamation-triangle"></i> {{ w }}</p>
                         </div>
-                        <div v-if="stageData.data_splitting.requires_confirmation" class="confirm-bar">
+                        <div v-if="stageData.data_splitting.requires_confirmation && stageStatus.data_splitting !== 'completed'" class="confirm-bar">
                             <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
                             <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
                             <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
                             <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
                         </div>
-                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                        <revision-panel v-if="showRevision && stageStatus.data_splitting !== 'completed'" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
                     </template>
                 </div>
 
@@ -437,26 +442,31 @@
                         <div class="stream-header"><div class="spinner-sm"></div><span>正在生成方案中...</span></div>
                         <div class="md-content" v-html="renderMd(stageStreamContent)"></div>
                     </div>
-                    <!-- 代码生成流式输出 -->
-                    <div v-else-if="runningStage === 'data_cleaning' && confirmStreaming.data_cleaning" class="stream-box">
-                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
-                        <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
-                        <div v-if="stageGeneratedCode.data_cleaning" class="code-preview">
-                            <div class="code-preview-header" @click="toggleCodePreview('data_cleaning')">
-                                <i :class="codePreviewExpanded.data_cleaning ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
-                                <span>生成的代码</span>
-                            </div>
-                            <pre v-if="codePreviewExpanded.data_cleaning"><code class="language-python" v-html="highlightCode(stageGeneratedCode.data_cleaning)"></code></pre>
-                        </div>
-                    </div>
                     <!-- 确认执行中（非流式降级） -->
-                    <div v-else-if="runningStage === 'data_cleaning' && confirmExecuting.data_cleaning" class="loading-box"><div class="spinner"></div>正在生成并执行清洗代码...</div>
+                    <div v-else-if="runningStage === 'data_cleaning' && confirmExecuting.data_cleaning && !stageData.data_cleaning" class="loading-box"><div class="spinner"></div>正在生成并执行清洗代码...</div>
                     <div v-else-if="runningStage === 'data_cleaning' && revising.data_cleaning" class="loading-box"><div class="spinner"></div>正在根据修改意见修订清洗方案...</div>
-                    <div v-else-if="runningStage === 'data_cleaning'" class="loading-box"><div class="spinner"></div>正在分析数据质量并生成清洗方案...</div>
-                    <template v-else-if="stageData.data_cleaning">
+                    <div v-else-if="runningStage === 'data_cleaning' && !stageData.data_cleaning" class="loading-box"><div class="spinner"></div>正在分析数据质量并生成清洗方案...</div>
+                    <template v-if="stageData.data_cleaning">
                         <div v-if="stageData.data_cleaning.proposal" class="md-content" v-html="renderMd(stageData.data_cleaning.proposal)"></div>
                         <skills-ref :skills="stageData.data_cleaning.skills_referenced"></skills-ref>
-                        <!-- 生成的代码展示 -->
+                        <!-- 代码生成流式输出（在方案下方） -->
+                        <div v-if="confirmStreaming.data_cleaning" class="stream-box" style="margin-top:12px">
+                            <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
+                            <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
+                            <div v-if="stageGeneratedCode.data_cleaning" class="code-preview">
+                                <div class="code-preview-header" @click="toggleCodePreview('data_cleaning')">
+                                    <i :class="codePreviewExpanded.data_cleaning ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                    <span>生成的代码</span>
+                                </div>
+                                <pre v-if="codePreviewExpanded.data_cleaning"><code class="language-python" v-html="highlightCode(stageGeneratedCode.data_cleaning)"></code></pre>
+                            </div>
+                            <div v-if="stageExecutionOutput.data_cleaning" class="execution-output">
+                                <div class="execution-output-header"><i class="fas fa-terminal"></i> 执行输出</div>
+                                <pre class="execution-output-content">{{ stageExecutionOutput.data_cleaning }}</pre>
+                            </div>
+                        </div>
+                        <div v-else-if="confirmExecuting.data_cleaning" class="loading-box" style="margin-top:12px"><div class="spinner"></div>正在生成并执行清洗代码...</div>
+                        <!-- 生成的代码展示（已完成状态） -->
                         <div v-if="stageGeneratedCode.data_cleaning && stageStatus.data_cleaning === 'completed'" class="code-preview" style="margin-top:12px">
                             <div class="code-preview-header" @click="toggleCodePreview('data_cleaning')">
                                 <i :class="codePreviewExpanded.data_cleaning ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
@@ -465,13 +475,17 @@
                             </div>
                             <pre v-if="codePreviewExpanded.data_cleaning"><code class="language-python" v-html="highlightCode(stageGeneratedCode.data_cleaning)"></code></pre>
                         </div>
-                        <div v-if="stageData.data_cleaning.requires_confirmation" class="confirm-bar">
+                        <div v-if="stageExecutionOutput.data_cleaning && stageStatus.data_cleaning === 'completed'" class="execution-output" style="margin-top:12px">
+                            <div class="execution-output-header"><i class="fas fa-terminal"></i> 执行输出</div>
+                            <pre class="execution-output-content">{{ stageExecutionOutput.data_cleaning }}</pre>
+                        </div>
+                        <div v-if="stageData.data_cleaning.requires_confirmation && !confirmStreaming.data_cleaning && !confirmExecuting.data_cleaning && stageStatus.data_cleaning !== 'completed'" class="confirm-bar">
                             <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
                             <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
                             <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
                             <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
                         </div>
-                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                        <revision-panel v-if="showRevision && stageStatus.data_cleaning !== 'completed'" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
                     </template>
                 </div>
 
@@ -502,24 +516,29 @@
                         <div class="stream-header"><div class="spinner-sm"></div><span>正在生成方案中...</span></div>
                         <div class="md-content" v-html="renderMd(stageStreamContent)"></div>
                     </div>
-                    <!-- 代码生成流式输出 -->
-                    <div v-else-if="runningStage === 'feature_engineering' && confirmStreaming.feature_engineering" class="stream-box">
-                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
-                        <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
-                        <div v-if="stageGeneratedCode.feature_engineering" class="code-preview">
-                            <div class="code-preview-header" @click="toggleCodePreview('feature_engineering')">
-                                <i :class="codePreviewExpanded.feature_engineering ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
-                                <span>生成的代码</span>
-                            </div>
-                            <pre v-if="codePreviewExpanded.feature_engineering"><code class="language-python" v-html="highlightCode(stageGeneratedCode.feature_engineering)"></code></pre>
-                        </div>
-                    </div>
-                    <div v-else-if="runningStage === 'feature_engineering' && confirmExecuting.feature_engineering" class="loading-box"><div class="spinner"></div>正在生成并执行特征工程代码...</div>
+                    <div v-else-if="runningStage === 'feature_engineering' && confirmExecuting.feature_engineering && !stageData.feature_engineering" class="loading-box"><div class="spinner"></div>正在生成并执行特征工程代码...</div>
                     <div v-else-if="runningStage === 'feature_engineering' && revising.feature_engineering" class="loading-box"><div class="spinner"></div>正在根据修改意见修订特征工程方案...</div>
-                    <div v-else-if="runningStage === 'feature_engineering'" class="loading-box"><div class="spinner"></div>正在生成特征工程方案...</div>
-                    <template v-else-if="stageData.feature_engineering">
+                    <div v-else-if="runningStage === 'feature_engineering' && !stageData.feature_engineering" class="loading-box"><div class="spinner"></div>正在生成特征工程方案...</div>
+                    <template v-if="stageData.feature_engineering">
                         <div v-if="stageData.feature_engineering.proposal" class="md-content" v-html="renderMd(stageData.feature_engineering.proposal)"></div>
                         <skills-ref :skills="stageData.feature_engineering.skills_referenced"></skills-ref>
+                        <!-- 代码生成流式输出（在方案下方） -->
+                        <div v-if="confirmStreaming.feature_engineering" class="stream-box" style="margin-top:12px">
+                            <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
+                            <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
+                            <div v-if="stageGeneratedCode.feature_engineering" class="code-preview">
+                                <div class="code-preview-header" @click="toggleCodePreview('feature_engineering')">
+                                    <i :class="codePreviewExpanded.feature_engineering ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                    <span>生成的代码</span>
+                                </div>
+                                <pre v-if="codePreviewExpanded.feature_engineering"><code class="language-python" v-html="highlightCode(stageGeneratedCode.feature_engineering)"></code></pre>
+                            </div>
+                            <div v-if="stageExecutionOutput.feature_engineering" class="execution-output">
+                                <div class="execution-output-header"><i class="fas fa-terminal"></i> 执行输出</div>
+                                <pre class="execution-output-content">{{ stageExecutionOutput.feature_engineering }}</pre>
+                            </div>
+                        </div>
+                        <div v-else-if="confirmExecuting.feature_engineering" class="loading-box" style="margin-top:12px"><div class="spinner"></div>正在生成并执行特征工程代码...</div>
                         <!-- 生成的代码展示 -->
                         <div v-if="stageGeneratedCode.feature_engineering && stageStatus.feature_engineering === 'completed'" class="code-preview" style="margin-top:12px">
                             <div class="code-preview-header" @click="toggleCodePreview('feature_engineering')">
@@ -529,13 +548,17 @@
                             </div>
                             <pre v-if="codePreviewExpanded.feature_engineering"><code class="language-python" v-html="highlightCode(stageGeneratedCode.feature_engineering)"></code></pre>
                         </div>
-                        <div v-if="stageData.feature_engineering.requires_confirmation" class="confirm-bar">
+                        <div v-if="stageExecutionOutput.feature_engineering && stageStatus.feature_engineering === 'completed'" class="execution-output" style="margin-top:12px">
+                            <div class="execution-output-header"><i class="fas fa-terminal"></i> 执行输出</div>
+                            <pre class="execution-output-content">{{ stageExecutionOutput.feature_engineering }}</pre>
+                        </div>
+                        <div v-if="stageData.feature_engineering.requires_confirmation && !confirmStreaming.feature_engineering && !confirmExecuting.feature_engineering && stageStatus.feature_engineering !== 'completed'" class="confirm-bar">
                             <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
                             <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
                             <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
                             <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
                         </div>
-                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                        <revision-panel v-if="showRevision && stageStatus.feature_engineering !== 'completed'" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
                         <!-- 特征评估（可选子阶段） -->
                         <div v-if="stageData.feature_engineering.feature_evaluation_pending" class="card" style="margin-top:16px;border:1px solid #e0e0e0;">
                             <div class="card-header" style="background:#f8f9fa;">
@@ -573,24 +596,29 @@
                         <div class="stream-header"><div class="spinner-sm"></div><span>正在生成方案中...</span></div>
                         <div class="md-content" v-html="renderMd(stageStreamContent)"></div>
                     </div>
-                    <!-- 代码生成流式输出 -->
-                    <div v-else-if="runningStage === 'model_training' && confirmStreaming.model_training" class="stream-box">
-                        <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
-                        <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
-                        <div v-if="stageGeneratedCode.model_training" class="code-preview">
-                            <div class="code-preview-header" @click="toggleCodePreview('model_training')">
-                                <i :class="codePreviewExpanded.model_training ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
-                                <span>生成的代码</span>
-                            </div>
-                            <pre v-if="codePreviewExpanded.model_training"><code class="language-python" v-html="highlightCode(stageGeneratedCode.model_training)"></code></pre>
-                        </div>
-                    </div>
-                    <div v-else-if="runningStage === 'model_training' && confirmExecuting.model_training" class="loading-box"><div class="spinner"></div>正在生成并执行训练代码...</div>
+                    <div v-else-if="runningStage === 'model_training' && confirmExecuting.model_training && !stageData.model_training" class="loading-box"><div class="spinner"></div>正在生成并执行训练代码...</div>
                     <div v-else-if="runningStage === 'model_training' && revising.model_training" class="loading-box"><div class="spinner"></div>正在根据修改意见修订建模方案...</div>
-                    <div v-else-if="runningStage === 'model_training'" class="loading-box"><div class="spinner"></div>正在生成建模方案...</div>
-                    <template v-else-if="stageData.model_training">
+                    <div v-else-if="runningStage === 'model_training' && !stageData.model_training" class="loading-box"><div class="spinner"></div>正在生成建模方案...</div>
+                    <template v-if="stageData.model_training">
                         <div v-if="stageData.model_training.proposal" class="md-content" v-html="renderMd(stageData.model_training.proposal)"></div>
                         <skills-ref :skills="stageData.model_training.skills_referenced"></skills-ref>
+                        <!-- 代码生成流式输出（在方案下方） -->
+                        <div v-if="confirmStreaming.model_training" class="stream-box" style="margin-top:12px">
+                            <div class="stream-header"><div class="spinner-sm"></div><span>正在生成并执行代码...</span></div>
+                            <div v-if="confirmStreamContent" class="md-content" v-html="renderMd(confirmStreamContent)"></div>
+                            <div v-if="stageGeneratedCode.model_training" class="code-preview">
+                                <div class="code-preview-header" @click="toggleCodePreview('model_training')">
+                                    <i :class="codePreviewExpanded.model_training ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                    <span>生成的代码</span>
+                                </div>
+                                <pre v-if="codePreviewExpanded.model_training"><code class="language-python" v-html="highlightCode(stageGeneratedCode.model_training)"></code></pre>
+                            </div>
+                            <div v-if="stageExecutionOutput.model_training" class="execution-output">
+                                <div class="execution-output-header"><i class="fas fa-terminal"></i> 执行输出</div>
+                                <pre class="execution-output-content">{{ stageExecutionOutput.model_training }}</pre>
+                            </div>
+                        </div>
+                        <div v-else-if="confirmExecuting.model_training" class="loading-box" style="margin-top:12px"><div class="spinner"></div>正在生成并执行训练代码...</div>
                         <!-- 生成的代码展示 -->
                         <div v-if="stageGeneratedCode.model_training && stageStatus.model_training === 'completed'" class="code-preview" style="margin-top:12px">
                             <div class="code-preview-header" @click="toggleCodePreview('model_training')">
@@ -600,19 +628,23 @@
                             </div>
                             <pre v-if="codePreviewExpanded.model_training"><code class="language-python" v-html="highlightCode(stageGeneratedCode.model_training)"></code></pre>
                         </div>
+                        <div v-if="stageExecutionOutput.model_training && stageStatus.model_training === 'completed'" class="execution-output" style="margin-top:12px">
+                            <div class="execution-output-header"><i class="fas fa-terminal"></i> 执行输出</div>
+                            <pre class="execution-output-content">{{ stageExecutionOutput.model_training }}</pre>
+                        </div>
                         <!-- 评估结果展示 -->
                         <div v-if="stageData.model_training && stageData.model_training.evaluation" class="eval-results" style="margin-top:12px">
                             <div class="card-title" style="font-size:14px"><i class="fas fa-chart-bar"></i> 模型评估结果</div>
                             <div v-if="stageData.model_training.evaluation.report" class="md-content" v-html="renderMd(stageData.model_training.evaluation.report)"></div>
                             <div v-else-if="stageData.model_training.evaluation.error" class="alert alert-warning">评估失败: {{ stageData.model_training.evaluation.error }}</div>
                         </div>
-                        <div v-if="stageData.model_training.requires_confirmation" class="confirm-bar">
+                        <div v-if="stageData.model_training.requires_confirmation && !confirmStreaming.model_training && !confirmExecuting.model_training && stageStatus.model_training !== 'completed'" class="confirm-bar">
                             <span class="label"><i class="fas fa-hand-point-right"></i> 请确认</span>
                             <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认</button>
                             <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
                             <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
                         </div>
-                        <revision-panel v-if="showRevision" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                        <revision-panel v-if="showRevision && stageStatus.model_training !== 'completed'" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
                     </template>
                 </div>
 
@@ -836,6 +868,56 @@ const SkillsRef = {
     `
 };
 
+// ========== SSE Stream Utility ==========
+
+function createSSEStream(url, { onContent, onProgress, onCodeGenerated, onExecutionOutput, onDone, onError, onFallback, timeout = 300000 }) {
+    const evtSource = new EventSource(url);
+    let timeoutId = null;
+
+    const resetTimeout = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+            evtSource.close();
+            if (onError) onError('连接超时，正在降级处理...');
+            if (onFallback) onFallback();
+        }, timeout);
+    };
+    resetTimeout();
+
+    evtSource.onmessage = (event) => {
+        resetTimeout();
+        let d;
+        try {
+            d = JSON.parse(event.data);
+        } catch (e) {
+            console.warn('[SSE] JSON parse error:', e.message, event.data.slice(0, 200));
+            return;
+        }
+
+        if (d.type === 'content') { if (onContent) onContent(d.content); }
+        else if (d.type === 'progress') { if (onProgress) onProgress(d.content); }
+        else if (d.type === 'code_generated') { if (onCodeGenerated) onCodeGenerated(d.content); }
+        else if (d.type === 'execution_output') { if (onExecutionOutput) onExecutionOutput(d.content); }
+        else if (d.type === 'done') {
+            clearTimeout(timeoutId);
+            evtSource.close();
+            if (onDone) onDone(d.content);
+        } else if (d.type === 'error') {
+            clearTimeout(timeoutId);
+            evtSource.close();
+            if (onError) onError(d.content || '服务端错误');
+        }
+    };
+
+    evtSource.onerror = () => {
+        clearTimeout(timeoutId);
+        evtSource.close();
+        if (onFallback) onFallback();
+    };
+
+    return evtSource;
+}
+
 // ========== Main App ==========
 
 const app = createApp({
@@ -902,6 +984,7 @@ const app = createApp({
         const revising = reactive({});  // 方案修订中
         const confirmStreamContent = ref('');
         const stageGeneratedCode = reactive({});
+        const stageExecutionOutput = reactive({});
         const codePreviewExpanded = reactive({});
 
         // -- Toast --
@@ -951,11 +1034,18 @@ const app = createApp({
         const renderMd = (text) => {
             if (!text) return '';
             const html = marked.parse(text);
+            const clean = DOMPurify.sanitize(html, {
+                ALLOWED_TAGS: ['h1','h2','h3','h4','h5','h6','p','br','hr','ul','ol','li','a','strong','em','del','code','pre','blockquote','table','thead','tbody','tr','th','td','img','span','div','sup','sub'],
+                ALLOWED_ATTR: ['href','src','alt','title','class','id','target','rel'],
+                ALLOW_DATA_ATTR: false,
+                FORBID_TAGS: ['script','style','iframe','object','embed','form','input','textarea','button'],
+                FORBID_ATTR: ['onerror','onload','onclick','onmouseover','onfocus','onblur'],
+            });
             // Defer highlight
             nextTick(() => {
                 document.querySelectorAll('.md-content pre code').forEach(b => { if (!b.dataset.highlighted) { hljs.highlightElement(b); b.dataset.highlighted = '1'; } });
             });
-            return html;
+            return clean;
         };
 
         const highlightCode = (code) => {
@@ -1054,45 +1144,35 @@ const app = createApp({
                 stageStreamContent.value = '';
                 try {
                     const url = `${API}/workflow/${sessionId.value}/stage/${stage}/stream`;
-                    const evtSource = new EventSource(url);
-                    evtSource.onmessage = (event) => {
-                        try {
-                            const d = JSON.parse(event.data);
-                            if (d.type === 'content') {
-                                stageStreamContent.value += d.content;
-                            } else if (d.type === 'progress') {
-                                // 可选：显示进度提示
-                            } else if (d.type === 'done') {
-                                evtSource.close();
-                                const result = JSON.parse(d.content);
-                                stageData[stage] = result;
-                                currentConfirmationId.value = result.confirmation_id || '';
-                                currentModifiableAspects.value = result.modifiable_aspects || [];
-                                revisionRound.value = 0;
-                                if (!result.requires_confirmation) {
-                                    stageStatus[stage] = 'completed';
-                                }
-                                stageStreaming[stage] = false;
-                                stageStreamContent.value = '';
-                                loading.stage = false; runningStage.value = '';
-                            } else if (d.type === 'error') {
-                                evtSource.close();
-                                toast(d.content || '阶段运行失败', 'error');
-                                stageStatus[stage] = 'error';
-                                stageStreaming[stage] = false;
-                                loading.stage = false; runningStage.value = '';
+                    createSSEStream(url, {
+                        onContent: (content) => { stageStreamContent.value += content; },
+                        onDone: (content) => {
+                            const result = JSON.parse(content);
+                            stageData[stage] = result;
+                            currentConfirmationId.value = result.confirmation_id || '';
+                            currentModifiableAspects.value = result.modifiable_aspects || [];
+                            revisionRound.value = 0;
+                            if (!result.requires_confirmation) {
+                                stageStatus[stage] = 'completed';
                             }
-                        } catch {}
-                    };
-                    evtSource.onerror = () => {
-                        evtSource.close();
-                        if (stageStreaming[stage]) {
-                            // 降级到 POST
                             stageStreaming[stage] = false;
                             stageStreamContent.value = '';
-                            runStageFallback(stage);
-                        }
-                    };
+                            loading.stage = false; runningStage.value = '';
+                        },
+                        onError: (msg) => {
+                            toast(msg || '阶段运行失败', 'error');
+                            stageStatus[stage] = 'error';
+                            stageStreaming[stage] = false;
+                            loading.stage = false; runningStage.value = '';
+                        },
+                        onFallback: () => {
+                            if (stageStreaming[stage]) {
+                                stageStreaming[stage] = false;
+                                stageStreamContent.value = '';
+                                runStageFallback(stage);
+                            }
+                        },
+                    });
                 } catch (e) {
                     stageStreaming[stage] = false;
                     runStageFallback(stage);
@@ -1137,65 +1217,56 @@ const app = createApp({
                 confirmStreaming[stage] = true;
                 confirmStreamContent.value = '';
                 stageGeneratedCode[stage] = '';
+                stageExecutionOutput[stage] = '';
                 try {
                     const params = new URLSearchParams({
                         confirmation_id: currentConfirmationId.value,
                         status: status,
                     });
                     const url = `${API}/confirmation/${sessionId.value}/submit/stream?${params}`;
-                    const evtSource = new EventSource(url);
-                    evtSource.onmessage = (event) => {
-                        try {
-                            const d = JSON.parse(event.data);
-                            if (d.type === 'content') {
-                                confirmStreamContent.value += d.content;
-                            } else if (d.type === 'progress') {
-                                confirmStreamContent.value += '\n\n**' + d.content + '**\n\n';
-                            } else if (d.type === 'code_generated') {
-                                stageGeneratedCode[stage] = d.content;
-                            } else if (d.type === 'done') {
-                                evtSource.close();
-                                const result = JSON.parse(d.content);
-                                if (result.success) {
-                                    stageStatus[stage] = 'completed';
-                                    stageResults[stage] = result.execution;
-                                    if (result.execution && result.execution.generated_code) {
-                                        stageGeneratedCode[stage] = result.execution.generated_code;
-                                    }
-                                    // 合并评估结果到 stageData
-                                    if (result.execution && result.execution.evaluation) {
-                                        stageData[stage] = { ...stageData[stage], evaluation: result.execution.evaluation };
-                                    }
-                                    showRevision.value = false;
-                                    toast('已确认执行', 'success');
-                                    if (currentStageIndex.value < stages.length - 1) {
-                                        currentStageIndex.value++;
-                                    }
-                                } else {
-                                    toast(result.error || '执行失败', 'error');
+                    createSSEStream(url, {
+                        onContent: (content) => { confirmStreamContent.value += content; },
+                        onProgress: (content) => { confirmStreamContent.value += '\n\n**' + content + '**\n\n'; },
+                        onCodeGenerated: (content) => { stageGeneratedCode[stage] = content; },
+                        onExecutionOutput: (content) => { stageExecutionOutput[stage] = (stageExecutionOutput[stage] || '') + content; },
+                        onDone: (content) => {
+                            const result = JSON.parse(content);
+                            if (result.success) {
+                                stageStatus[stage] = 'completed';
+                                stageResults[stage] = result.execution;
+                                if (result.execution && result.execution.generated_code) {
+                                    stageGeneratedCode[stage] = result.execution.generated_code;
                                 }
-                                confirmStreaming[stage] = false;
-                                confirmExecuting[stage] = false;
-                                confirmStreamContent.value = '';
-                                loading.stage = false; runningStage.value = '';
-                            } else if (d.type === 'error') {
-                                evtSource.close();
-                                toast(d.content || '执行失败', 'error');
-                                confirmStreaming[stage] = false;
-                                confirmExecuting[stage] = false;
-                                loading.stage = false; runningStage.value = '';
+                                if (result.execution && result.execution.evaluation) {
+                                    stageData[stage] = { ...stageData[stage], evaluation: result.execution.evaluation };
+                                }
+                                showRevision.value = false;
+                                toast('已确认执行', 'success');
+                                if (currentStageIndex.value < stages.length - 1) {
+                                    currentStageIndex.value++;
+                                }
+                            } else {
+                                toast(result.error || '执行失败', 'error');
                             }
-                        } catch {}
-                    };
-                    evtSource.onerror = () => {
-                        evtSource.close();
-                        if (confirmStreaming[stage]) {
                             confirmStreaming[stage] = false;
+                            confirmExecuting[stage] = false;
                             confirmStreamContent.value = '';
-                            // 降级到 POST
-                            submitConfirmFallback(status);
-                        }
-                    };
+                            loading.stage = false; runningStage.value = '';
+                        },
+                        onError: (msg) => {
+                            toast(msg || '执行失败', 'error');
+                            confirmStreaming[stage] = false;
+                            confirmExecuting[stage] = false;
+                            loading.stage = false; runningStage.value = '';
+                        },
+                        onFallback: () => {
+                            if (confirmStreaming[stage]) {
+                                confirmStreaming[stage] = false;
+                                confirmStreamContent.value = '';
+                                submitConfirmFallback(status);
+                            }
+                        },
+                    });
                 } catch (e) {
                     confirmStreaming[stage] = false;
                     submitConfirmFallback(status);
@@ -1348,29 +1419,29 @@ const app = createApp({
 
             try {
                 const url = `${API}/chat/stream?session_id=${encodeURIComponent(sessionId.value)}&message=${encodeURIComponent(msg)}&model=${encodeURIComponent(config.model)}`;
-                const evtSource = new EventSource(url);
-                evtSource.onmessage = (event) => {
-                    try {
-                        const d = JSON.parse(event.data);
-                        if (d.type === 'content') {
-                            chatStreamContent.value += d.content;
-                        } else if (d.type === 'done' || d.type === 'error') {
-                            evtSource.close();
-                            chatMessages.value.push({ role: 'assistant', content: chatStreamContent.value || d.content || '' });
-                            chatStreaming.value = false;
-                            chatStreamContent.value = '';
-                        }
-                    } catch {}
-                    nextTick(() => { if (chatBox.value) chatBox.value.scrollTop = chatBox.value.scrollHeight; });
-                };
-                evtSource.onerror = () => {
-                    evtSource.close();
-                    if (chatStreaming.value) {
-                        // Fallback to sync
+                createSSEStream(url, {
+                    onContent: (content) => {
+                        chatStreamContent.value += content;
+                        nextTick(() => { if (chatBox.value) chatBox.value.scrollTop = chatBox.value.scrollHeight; });
+                    },
+                    onDone: (content) => {
+                        chatMessages.value.push({ role: 'assistant', content: chatStreamContent.value || content || '' });
                         chatStreaming.value = false;
-                        fallbackChat(msg);
-                    }
-                };
+                        chatStreamContent.value = '';
+                        nextTick(() => { if (chatBox.value) chatBox.value.scrollTop = chatBox.value.scrollHeight; });
+                    },
+                    onError: (msg) => {
+                        chatMessages.value.push({ role: 'assistant', content: chatStreamContent.value || msg || '' });
+                        chatStreaming.value = false;
+                        chatStreamContent.value = '';
+                    },
+                    onFallback: () => {
+                        if (chatStreaming.value) {
+                            chatStreaming.value = false;
+                            fallbackChat(msg);
+                        }
+                    },
+                });
             } catch (e) {
                 chatStreaming.value = false;
                 fallbackChat(msg);
@@ -1568,7 +1639,7 @@ const app = createApp({
             sessionId, config, loading, runningStage, uploadState,
             currentConfirmationId, currentModifiableAspects, showRevision, revisionRound,
             stageStreamContent, stageStreaming,
-            confirmStreaming, confirmExecuting, revising, confirmStreamContent, stageGeneratedCode, codePreviewExpanded,
+            confirmStreaming, confirmExecuting, revising, confirmStreamContent, stageGeneratedCode, stageExecutionOutput, codePreviewExpanded,
             highlightCode, toggleCodePreview,
             toasts, toast,
             chatMessages, chatInput, chatStreaming, chatStreamContent, chatBox,

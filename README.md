@@ -1,4 +1,4 @@
-# AutoML ReAct - 交互式智能建模系统
+# GeniusModel - 交互式智能建模系统
 
 ## 项目简介
 
@@ -39,9 +39,11 @@
 | 组件 | 位置 | 职责 |
 |------|------|------|
 | **ReActAgent** | `core/react_agent.py` | ReAct 循环引擎，工具管理，LLM 消息构建与交互 |
+| **PlanExecuteMixin** | `core/plan_execute_mixin.py` | plan→confirm→code 两阶段编排模板方法 |
 | **Memory** | `core/memory.py` | 对话历史、思考过程、动作和观察的记忆管理 |
 | **Observation** | `core/observation.py` | 工具执行结果的统一表示（数据、错误、状态） |
 | **Middleware** | `core/middleware.py` | 中间件基类，定义迭代上下文和中间件链 |
+| **AppRegistry** | `api/registry.py` | 集中式注册表，并发安全的会话/资产/日志管理 |
 | **ConfigLoader** | `config/config_loader.py` | 从 YAML 加载 Prompt、LLM 配置、工作流配置（支持 `${ENV_VAR}` 环境变量引用） |
 | **LLMProviderFactory** | `llm/provider_factory.py` | LLM 提供者工厂，统一管理多种模型提供者 |
 | **AssetManager** | `assets/asset_manager.py` | 会话资产管理（数据、代码、模型、报告）按目录组织 |
@@ -51,8 +53,21 @@
 | **SubprocessExecutor** | `utils/subprocess_executor.py` | 隔离子进程执行 LLM 生成的代码，超时控制与崩溃隔离 |
 | **StreamCallback** | `core/stream_callback.py` | 流式输出回调机制（Agent → SSE） |
 | **CodeActAgent** | `utils/codeact_agent.py` | CodeAct 模式：迭代式代码生成与执行 |
-| **CodeGenerator** | `utils/code_generator.py` | 代码生成与执行验证 |
-| **Sandbox** | `utils/sandbox.py` | 沙箱执行环境封装 |
+
+### API 架构
+
+系统采用模块化 API 设计，通过 `create_app()` 工厂函数支持测试注入：
+
+```
+automl_react/api/
+├── main.py              # App 工厂 + 中间件 + 路由注册
+├── registry.py          # AppRegistry — 并发安全的集中式状态管理
+├── deps.py              # FastAPI 依赖注入（认证、registry）
+├── session_manager.py   # 模块级便捷入口（委托 registry）
+├── helpers.py           # 纯函数工具集
+├── routes/              # 8 个路由模块（workflow/confirmation/assets/...）
+└── services/            # 业务编排（stage_runner/stage_executor/llm_factory）
+```
 
 ### 中间件系统
 
@@ -182,7 +197,7 @@ assets/{session_id}/
 ## 项目结构
 
 ```
-AutoMLByLLM/
+GeniusModel/
 ├── automl_react/                    # 核心代码库
 │   ├── agents/                      # 各阶段 Agent 实现
 │   │   ├── data_analysis_agent.py   #   问题定义
@@ -193,8 +208,25 @@ AutoMLByLLM/
 │   │   ├── feature_engineering_agent.py # 特征工程
 │   │   ├── model_training_agent.py  #   模型训练
 │   │   └── model_evaluation_agent.py#   模型评估
-│   ├── api/
-│   │   └── main.py                  # FastAPI 主入口（25+ 个端点）
+│   ├── api/                         # FastAPI API 层
+│   │   ├── main.py                  #   App 工厂 + 路由注册
+│   │   ├── registry.py              #   AppRegistry 集中式状态管理
+│   │   ├── deps.py                  #   依赖注入（认证、registry）
+│   │   ├── session_manager.py       #   会话便捷入口
+│   │   ├── helpers.py               #   纯函数工具集
+│   │   ├── routes/                  #   8 个路由模块
+│   │   │   ├── workflow.py          #     工作流控制
+│   │   │   ├── confirmation.py      #     确认管理
+│   │   │   ├── assets.py            #     资产访问
+│   │   │   ├── sessions.py          #     会话管理
+│   │   │   ├── chat.py              #     对话接口
+│   │   │   ├── skills.py            #     Skills 知识
+│   │   │   ├── report.py            #     报告生成
+│   │   │   └── predict.py           #     预测服务
+│   │   └── services/                #   业务编排
+│   │       ├── stage_runner.py      #     阶段计划生成
+│   │       ├── stage_executor.py    #     阶段代码执行
+│   │       └── llm_factory.py       #     LLM 客户端工厂
 │   ├── assets/
 │   │   └── asset_manager.py         # 会话资产管理
 │   ├── config/
@@ -206,24 +238,17 @@ AutoMLByLLM/
 │   │   └── confirmation_point.py    # 用户确认/修改/跳过/拒绝
 │   ├── core/
 │   │   ├── react_agent.py           # ReAct Agent 核心循环
+│   │   ├── plan_execute_mixin.py    # Plan→Code 两阶段模板方法
 │   │   ├── memory.py                # 对话记忆管理
 │   │   ├── observation.py           # 观察结果表示
 │   │   ├── middleware.py            # 中间件基类与迭代上下文
 │   │   ├── stream_callback.py       # 流式输出回调机制
 │   │   └── middlewares/             # 中间件实现
-│   │       ├── summarization_middleware.py  # 记忆上下文优化
-│   │       ├── logging_middleware.py        # LLM 调用日志
-│   │       ├── error_handling_middleware.py  # 错误恢复
-│   │       ├── token_monitor_middleware.py   # Token 监控
-│   │       └── timeout_middleware.py         # 超时管理
 │   ├── evaluation/
 │   │   └── model_evaluator.py       # 评估指标计算
 │   ├── llm/                         # LLM 提供者管理
 │   │   ├── provider_factory.py      # 提供者工厂（统一接口）
 │   │   └── providers/               # 具体提供者实现
-│   │       ├── openai_provider.py            # OpenAI 原生
-│   │       ├── openai_compatible_provider.py # OpenAI 兼容（Kimi、DeepSeek 等）
-│   │       └── anthropic_provider.py         # Anthropic Claude
 │   ├── logger/
 │   │   └── llm_logger.py            # LLM 调用日志（JSONL）
 │   ├── report/
@@ -231,20 +256,8 @@ AutoMLByLLM/
 │   │   └── pipeline_generator.py    # 全流程可复现 Python 脚本
 │   ├── skills_loader/
 │   │   └── skill_loader.py          # Skills 知识包加载
-│   ├── tools/
-│   │   ├── base_tool.py             # 工具抽象基类
-│   │   ├── data_tools.py            # 数据加载与分析
-│   │   ├── feature_tools.py         # 特征生成
-│   │   ├── model_tools.py           # 模型训练
-│   │   ├── profile_tools.py         # 数据质量分析
-│   │   ├── stage_tools.py           # 前序阶段结果查询
-│   │   └── skill_tools.py           # Skills 搜索与读取
-│   ├── utils/
-│   │   ├── code_generator.py        # 代码生成与验证
-│   │   ├── codeact_agent.py         # CodeAct 迭代生成执行
-│   │   ├── code_executor.py         # 代码执行器
-│   │   ├── subprocess_executor.py   # 隔离子进程执行（超时/崩溃隔离）
-│   │   └── sandbox.py               # 沙箱执行环境
+│   ├── tools/                       # 工具实现
+│   ├── utils/                       # 工具类（CodeAct、沙箱、子进程）
 │   └── workflow/
 │       └── workflow_state.py        # 工作流状态机（11 个状态）
 │
@@ -252,16 +265,6 @@ AutoMLByLLM/
 │   └── index.html                   # 单页应用（原生 HTML/CSS/JS）
 │
 ├── skills/                          # 专业知识包
-│   ├── data-analysis-1.0.2/
-│   ├── feature-engineering-patterns-1.0.0/
-│   ├── model-selection-heuristics-1.0.0/
-│   ├── afrexai-ml-engineering-1.0.0/
-│   └── ml-model-eval-benchmark-0.1.0/
-│
-├── tests/                           # 测试文件
-│
-├── logs/                            # 运行时日志
-│   └── llm_calls/                   # LLM 调用日志（per session）
 │
 ├── assets/                          # 运行时生成的会话资产
 │
@@ -274,11 +277,11 @@ AutoMLByLLM/
 
 | 领域 | 技术 |
 |------|------|
-| **Agent 架构** | ReAct (Reasoning + Acting) + CodeAct（迭代代码生成执行） |
+| **Agent 架构** | ReAct (Reasoning + Acting) + CodeAct（迭代代码生成执行） + PlanExecuteMixin（模板方法） |
 | **流式回调** | StreamCallback 机制（Agent 内部 → SSE 端点） |
 | **中间件系统** | 自定义中间件链（摘要、日志、错误处理、Token 监控、超时） |
-| **LLM 提供者** | 工厂模式：OpenAI / OpenAI 兼容（Kimi、DeepSeek、通义千问）/ Anthropic Claude |
-| **Web 框架** | FastAPI + Uvicorn |
+| **LLM 提供者** | 工厂模式：OpenAI / OpenAI 兼容（Kimi、DeepSeek、通义千问）/ Anthropic Claude（基于 langchain-core + langchain-openai + langchain-anthropic） |
+| **Web 框架** | FastAPI + Uvicorn（`create_app()` 工厂模式，`AppRegistry` 并发安全） |
 | **流式通信** | Server-Sent Events (SSE) |
 | **前端** | 原生 HTML/CSS/JS + marked.js (Markdown) + highlight.js (代码高亮) |
 | **数据处理** | Pandas + NumPy |
@@ -332,28 +335,14 @@ models:
     max_tokens: 65536
     api_key: "${DASHSCOPE_API_KEY}"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-
-stage_models:                        # 可为不同阶段指定不同模型
-  data_analysis: "claude-opus-4-6"
-  data_cleaning: "claude-opus-4-6"
-  feature_engineering: "claude-opus-4-6"
-  model_training: "claude-opus-4-6"
-  report_generation: "claude-opus-4-6"
-  code_generation: "claude-opus-4-6"
-
-stage_max_tokens:                    # 各阶段 max_tokens 覆盖
-  data_cleaning: 8192
-  data_cleaning_plan: 4096
-  code_generation: 8192
 ```
 
-设置对应的环境变量（根据使用的模型配置）：
+设置对应的环境变量：
 
 ```bash
 export MOONSHOT_API_KEY="your-api-key"    # Moonshot Kimi
 export DASHSCOPE_API_KEY="your-api-key"   # 通义千问
 export OPENAI_API_KEY="your-api-key"      # OpenAI
-export DEEPSEEK_API_KEY="your-api-key"    # DeepSeek
 export ANTHROPIC_API_KEY="your-api-key"   # Anthropic Claude
 ```
 
@@ -370,12 +359,8 @@ python -m automl_react.api.main
 **启动前端**（可选）：
 
 ```bash
-# 方式一：用 http server
 cd frontend && python -m http.server 8080
 # 访问 http://localhost:8080
-
-# 方式二：直接打开
-open frontend/index.html
 ```
 
 ## API 接口
@@ -388,15 +373,13 @@ open frontend/index.html
 | **数据上传** | | |
 | `/upload` | POST | 上传数据文件（multipart/form-data） |
 | **工作流控制** | | |
-| `/workflow/start` | POST | 启动新工作流（session_id, data_path, target_column, task_type, model, task_description） |
+| `/workflow/start` | POST | 启动新工作流 |
 | `/workflow/{session_id}/status` | GET | 获取工作流状态 |
 | `/workflow/{session_id}/stage/{stage}/run` | POST | 执行指定阶段 |
-| `/workflow/{session_id}/stage/{stage}/stream` | GET | 流式执行阶段（SSE） |
 | **确认管理** | | |
 | `/confirmation/submit` | POST | 提交确认决策 |
 | `/confirmation/revise` | POST | 修订方案（多轮修订） |
 | `/confirmation/{session_id}/pending` | GET | 获取当前待确认项 |
-| `/confirmation/{session_id}/submit/stream` | GET | 流式提交确认（SSE） |
 | **对话接口** | | |
 | `/chat` | POST | 同步对话 |
 | `/chat/stream` | GET | 流式对话（SSE） |
@@ -417,22 +400,9 @@ open frontend/index.html
 | `/pipeline/generate` | POST | 生成全流程可复现 Python 脚本 |
 | **预测** | | |
 | `/predict` | POST | 使用已训练模型对新数据进行预测 |
+| `/predict/upload` | POST | 上传数据并预测 |
 | **日志** | | |
 | `/logs/{session_id}/llm` | GET | 获取 LLM 调用日志 |
-
-### 工作流阶段标识
-
-| 标识 | 说明 |
-|------|------|
-| `data_upload` | 数据上传 |
-| `problem_definition` | 问题定义 |
-| `data_contract_check` | 数据契约检查 |
-| `data_splitting` | 数据集切分 |
-| `data_cleaning` | 数据清洗 |
-| `data_exploration` | 数据探索性分析 |
-| `feature_engineering` | 特征工程 |
-| `model_training` | 模型训练 |
-| `model_evaluation` | 模型评估 |
 
 ## 配置说明
 
@@ -446,73 +416,16 @@ open frontend/index.html
 - `code_generation_full`：代码生成提示词
 - `plan_revision`：方案修订提示词（支持多轮修订）
 
-**关键特点**：所有 Prompt 强制要求"当前数据事实快照"，防止 LLM 被历史文本污染。
-
 #### 2. LLM 配置 (`automl_react/config/llm_config.yaml`)
 
-```yaml
-default_model: "claude-opus-4-6"
-
-models:
-  claude-opus-4-6:
-    provider: "openai"
-    model_name: "claude-opus-4-6"
-    temperature: 1.0
-    max_tokens: 65536
-    api_key: "${YOUR_API_KEY}"
-    base_url: "https://your-api-endpoint/v1"
-
-  kimi-k2.5:
-    provider: "openai"
-    model_name: "kimi-k2.5"
-    temperature: 1.0
-    max_tokens: 65536
-    api_key: "${MOONSHOT_API_KEY}"       # 支持环境变量引用
-    base_url: "https://api.moonshot.cn/v1"
-
-  qwen3.6-plus:
-    provider: "openai"
-    model_name: "qwen3.6-plus"
-    temperature: 1.0
-    max_tokens: 65536
-    api_key: "${DASHSCOPE_API_KEY}"
-    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-
-stage_models:                            # 阶段级模型覆盖
-  data_analysis: "claude-opus-4-6"
-  data_cleaning: "claude-opus-4-6"
-  model_training: "claude-opus-4-6"
-
-stage_max_tokens:                        # 阶段级 token 限制
-  data_cleaning: 8192
-  data_cleaning_plan: 4096
-  code_generation: 8192
-
-logging:
-  enabled: true
-  log_dir: "logs/llm_calls"
-  log_format: "jsonl"
-
-streaming:
-  enabled: true
-  chunk_size: 100
-
-retry:
-  max_retries: 3
-  backoff: "exponential"
-
-rate_limit:
-  enabled: false
-  requests_per_minute: 60
-  tokens_per_minute: 100000
-```
+支持多模型配置、阶段级模型覆盖、Token 限制、重试策略、限流等。
 
 #### 3. 工作流配置 (`automl_react/config/workflow_config.yaml`)
 
 ```yaml
 react_agent:
-  max_iterations: 10                     # ReAct 最大迭代次数
-  timeout: 600                           # 超时秒数
+  max_iterations: 10
+  timeout: 600
 
 stages:
   data_cleaning:
@@ -523,55 +436,30 @@ stages:
 confirmation:
   timeout: 3600
   auto_skip: false
-  default_action: "confirm"
-
-assets:
-  save_code: true
-  save_models: true
 
 execution:
-  sandbox_mode: "subprocess"             # 沙盒执行模式
-  memory_limit_mb: 2048                  # 内存限制
-  cpu_time_limit: 300                    # CPU 时间限制（秒）
+  sandbox_mode: "subprocess"
+  memory_limit_mb: 2048
+  cpu_time_limit: 300
 ```
 
-## LLM 调用日志
+## 测试
 
-每次 LLM 调用记录为 JSONL 格式，存储在 `logs/llm_calls/{session_id}/YYYYMMDD.jsonl`：
+系统支持通过 `create_app()` 工厂函数创建隔离的测试实例：
 
-```json
-{
-  "session_id": "session_123",
-  "timestamp": "2024-04-08T10:30:00",
-  "model_name": "kimi-k2.5",
-  "provider": "openai",
-  "stage": "data_cleaning",
-  "input_content": "...",
-  "output_content": "...",
-  "input_tokens": 2000,
-  "output_tokens": 1500,
-  "latency_ms": 3500,
-  "metadata": {}
-}
+```python
+from automl_react.api.registry import AppRegistry
+from automl_react.api.main import create_app
+from fastapi.testclient import TestClient
+
+# 创建独立的测试 app，状态完全隔离
+registry = AppRegistry(max_sessions=5, ttl_hours=1)
+app = create_app(registry=registry)
+client = TestClient(app)
+
+resp = client.get("/")
+assert resp.status_code == 200
 ```
-
-## 前端功能
-
-单页应用（SPA），无需构建工具，直接浏览器打开：
-
-- **工作流可视化**：9 个阶段进度状态实时展示（未开始/进行中/完成）
-- **方案展示**：Markdown 渲染 + Python 代码高亮
-- **用户确认面板**：Confirm / Modify / Skip / Reject 按钮
-- **流式输出**：SSE 实时显示 LLM 生成的长内容
-- **文件上传**：拖拽或点击上传 CSV/Excel 数据文件
-- **会话恢复**：支持断点续跑，自动恢复各阶段已完成结果
-- **模型选择**：可选配不同 LLM 模型执行工作流
-- **任务描述**：支持用户输入建模背景和业务需求说明
-- **资产管理**：下载数据、模型、报告等生成文件
-- **聊天界面**：与 Agent 实时对话交互
-- **Skills 参考**：展示当前阶段引用的专业知识
-
-**界面布局**：左侧为控制面板（上传数据、配置任务、阶段切换），右侧为内容区（方案展示、确认交互、资产列表）。
 
 ## 使用流程
 
@@ -594,9 +482,9 @@ execution:
 | **人在回路** | 关键阶段支持确认/修改/跳过，尊重用户业务知识 |
 | **可审计与可复现** | JSONL 日志 + 资产保存 + 状态持久化，支持断点恢复 |
 | **配置驱动** | YAML 管理 Prompt 和模型，支持阶段级模型覆盖与 Token 限制 |
-| **工程最佳实践** | 严格区分数据集，防止泄漏，代码隔离执行 |
+| **并发安全** | AppRegistry + asyncio.Lock 保护共享状态，LRU 淘汰防 OOM |
+| **可测试性** | create_app() 工厂 + 依赖注入，测试时完全隔离状态 |
 | **崩溃隔离** | LLM 生成的代码在子进程/沙箱执行，主进程不受影响 |
-| **中间件扩展** | 通过中间件链灵活插入横切关注点（日志、监控、限流等） |
 
 ## 许可证
 

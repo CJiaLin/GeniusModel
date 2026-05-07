@@ -17,6 +17,30 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 
+def get_venv_python() -> str:
+    """获取 venv 环境的 Python 路径，优先使用虚拟环境。"""
+    # 检查 VIRTUAL_ENV 环境变量
+    virtual_env = os.environ.get("VIRTUAL_ENV")
+    if virtual_env:
+        venv_python = os.path.join(virtual_env, "bin", "python")
+        if os.path.isfile(venv_python):
+            return venv_python
+
+    # 从当前工作目录向上查找 venv / .venv
+    search_dir = os.getcwd()
+    for _ in range(5):
+        for venv_name in ("venv", ".venv"):
+            candidate = os.path.join(search_dir, venv_name, "bin", "python")
+            if os.path.isfile(candidate):
+                return candidate
+        parent = os.path.dirname(search_dir)
+        if parent == search_dir:
+            break
+        search_dir = parent
+
+    return sys.executable
+
+
 @dataclass
 class SubprocessExecutionResult:
     """子进程执行结果"""
@@ -45,9 +69,14 @@ class SubprocessCodeExecutor:
         cpu_time_limit: Optional[int] = None,
     ):
         self.timeout = timeout
-        self.python_path = python_path or sys.executable
+        self.python_path = python_path or self._detect_venv_python()
         self.memory_limit_mb = memory_limit_mb
         self.cpu_time_limit = cpu_time_limit or timeout
+
+    @staticmethod
+    def _detect_venv_python() -> str:
+        """自动检测项目 venv 的 Python 路径。"""
+        return get_venv_python()
 
     def execute(
         self,

@@ -72,6 +72,7 @@ class SkillLoader:
 
         self.skills_dir = Path(skills_dir)
         self._skills: Dict[str, Skill] = {}
+        self._section_cache: Dict[str, Optional[str]] = {}  # key: "skill_name::section_key"
 
     def scan_skills(self) -> List[str]:
         """
@@ -365,7 +366,7 @@ class SkillLoader:
 
     def get_section_content(self, skill_name: str, section_key: str) -> Optional[str]:
         """
-        获取 skill 指定章节的内容
+        获取 skill 指定章节的内容（带缓存）
 
         支持两种格式：
         - 直接文件引用: "techniques.md"
@@ -378,6 +379,16 @@ class SkillLoader:
         Returns:
             章节内容文本
         """
+        cache_key = f"{skill_name}::{section_key}"
+        if cache_key in self._section_cache:
+            return self._section_cache[cache_key]
+
+        result = self._resolve_section_content(skill_name, section_key)
+        self._section_cache[cache_key] = result
+        return result
+
+    def _resolve_section_content(self, skill_name: str, section_key: str) -> Optional[str]:
+        """实际解析章节内容（无缓存）"""
         skill = self.get_skill(skill_name)
         if not skill:
             return None
@@ -435,6 +446,12 @@ class SkillLoader:
         """
         if skill_name in self._skills:
             del self._skills[skill_name]
+
+        # 清除该 skill 的章节缓存
+        prefix = f"{skill_name}::"
+        stale_keys = [k for k in self._section_cache if k.startswith(prefix)]
+        for k in stale_keys:
+            del self._section_cache[k]
 
         return self.load_skill(skill_name)
 
