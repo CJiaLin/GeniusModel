@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from automl_react.workflow import WorkflowStage
+from automl_react.workflow.workflow_state import WorkflowMode
 from automl_react.confirmation import ConfirmationStatus
 from automl_react.assets import get_asset_manager
 from automl_react.report import PipelineGenerator, ReportGenerator
@@ -33,6 +34,7 @@ from ..services.stage_executor import (
     execute_data_contract_check,
     execute_data_splitting,
     execute_data_cleaning,
+    execute_data_aggregation,
     execute_feature_engineering,
     execute_feature_evaluation,
     execute_model_training,
@@ -112,17 +114,62 @@ async def submit_confirmation(request: UserConfirmationRequest, registry: AppReg
                 execution_result = await execute_data_splitting(
                     session, data_path, request.modifications
                 )
+            elif stage == "data_aggregation":
+                execution_result = await execute_data_aggregation(
+                    session, request.modifications
+                )
             elif stage == "data_cleaning":
                 execution_result = await execute_data_cleaning(
                     session, get_train_raw_data_path(workflow_state) or data_path, request.modifications
                 )
             elif stage == "feature_engineering":
-                execution_result = await execute_feature_engineering(
-                    session, get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, request.modifications
-                )
-                # 特征工程完成后提示可选特征评估
-                if execution_result.get("success"):
-                    evaluation_proposal = """## 是否进行特征评估（可选）
+                wf_mode = workflow_state.get_context("workflow_mode", WorkflowMode.FULL)
+
+                if wf_mode == WorkflowMode.SCHEMA_ONLY:
+                    # Schema-only: 确认后生成详细代码模板（不执行）
+                    import asyncio
+                    agent = session["agents"].get("feature")
+                    if agent:
+                        loop = asyncio.get_event_loop()
+                        code = await loop.run_in_executor(
+                            None, agent.generate_feature_code_only, request.modifications
+                        )
+                    else:
+                        code = None
+                    execution_result = {
+                        "success": True,
+                        "stage": "feature_engineering",
+                        "mode": "schema_only",
+                        "generated_code": code,
+                        "message": "特征工程代码模板已生成（Schema-only 模式，无需执行）",
+                    }
+                    # 直接完成工作流
+                    workflow_state.transition_to(
+                        WorkflowStage.COMPLETED,
+                        message="Schema-only workflow completed"
+                    )
+                else:
+                    execution_result = await execute_feature_engineering(
+                        session, get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, request.modifications
+                    )
+
+                    if wf_mode == WorkflowMode.FEATURE_ONLY and execution_result.get("success"):
+                        # Feature-only: 执行成功后自动进行特征评估并完成
+                        try:
+                            eval_result = await execute_feature_evaluation(session, target_column, task_type)
+                            execution_result["evaluation"] = eval_result
+                            print(f"[API] 特征评估执行完成: success={eval_result.get('success')}")
+                        except Exception as eval_err:
+                            print(f"[API] 特征评估执行失败: {eval_err}")
+                            execution_result["evaluation"] = {"success": False, "error": str(eval_err)}
+
+                        workflow_state.transition_to(
+                            WorkflowStage.COMPLETED,
+                            message="Feature-only workflow completed"
+                        )
+                    elif execution_result.get("success"):
+                        # full 模式: 提示可选特征评估
+                        evaluation_proposal = """## 是否进行特征评估（可选）
 
 特征工程已执行完成。你可以选择继续进行特征评估，系统将：
 
@@ -136,15 +183,15 @@ async def submit_confirmation(request: UserConfirmationRequest, registry: AppReg
 - `confirmed`：执行特征评估
 - `skipped`：跳过特征评估，继续后续流程
 """
-                    next_confirmation_point = confirmation_manager.add_confirmation_point(
-                        stage="feature_evaluation",
-                        proposal_content=evaluation_proposal,
-                        expected_outcome="生成特征可解释性与可靠性分析报告",
-                        metadata={
-                            "stage": "feature_evaluation",
-                            "features_data_path": execution_result.get("features_data_path")
-                        }
-                    )
+                        next_confirmation_point = confirmation_manager.add_confirmation_point(
+                            stage="feature_evaluation",
+                            proposal_content=evaluation_proposal,
+                            expected_outcome="生成特征可解释性与可靠性分析报告",
+                            metadata={
+                                "stage": "feature_evaluation",
+                                "features_data_path": execution_result.get("features_data_path")
+                            }
+                        )
             elif stage == "model_training":
                 execution_result = await execute_model_training(
                     session, get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, request.modifications
@@ -258,6 +305,7 @@ def _get_agent_for_stage(session: Dict, stage: str):
     stage_agent_map = {
         "problem_definition": "analysis",
         "data_contract_check": "analysis",
+        "data_aggregation": "aggregation",
         "data_splitting": "splitting",
         "data_cleaning": "cleaning",
         "feature_engineering": "feature",
@@ -332,6 +380,7 @@ async def revise_plan(request: PlanRevisionRequest, registry: AppRegistry = Depe
     # 保存修订后方案到资产
     asset_manager = get_asset_manager(session_id=request.session_id)
     stage_asset_map = {
+        "data_aggregation": ("aggregation", "aggregation_plan.md"),
         "data_cleaning": ("cleaning", "cleaning_plan.md"),
         "feature_engineering": ("features", "feature_engineering_plan.md"),
         "model_training": ("models", "model_training_plan.md"),
@@ -439,10 +488,44 @@ async def submit_confirmation_stream(
                     exec_result = await execute_data_cleaning(
                         session, get_train_raw_data_path(workflow_state) or data_path, None
                     )
+                elif stage == "data_aggregation":
+                    exec_result = await execute_data_aggregation(session, None)
                 elif stage == "feature_engineering":
-                    exec_result = await execute_feature_engineering(
-                        session, get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, None
-                    )
+                    wf_mode = workflow_state.get_context("workflow_mode", WorkflowMode.FULL)
+                    if wf_mode == WorkflowMode.SCHEMA_ONLY:
+                        # Schema-only: 确认后生成详细代码模板（不执行）
+                        fe_agent = session["agents"].get("feature")
+                        if fe_agent:
+                            code = await asyncio.get_event_loop().run_in_executor(
+                                None, fe_agent.generate_feature_code_only, None
+                            )
+                        else:
+                            code = None
+                        exec_result = {
+                            "success": True,
+                            "stage": "feature_engineering",
+                            "mode": "schema_only",
+                            "generated_code": code,
+                            "message": "特征工程代码模板已生成（Schema-only 模式）",
+                        }
+                        workflow_state.transition_to(
+                            WorkflowStage.COMPLETED,
+                            message="Schema-only workflow completed"
+                        )
+                    else:
+                        exec_result = await execute_feature_engineering(
+                            session, get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, None
+                        )
+                        if wf_mode == WorkflowMode.FEATURE_ONLY and exec_result.get("success"):
+                            try:
+                                eval_result = await execute_feature_evaluation(session, target_column, task_type)
+                                exec_result["evaluation"] = eval_result
+                            except Exception as eval_err:
+                                exec_result["evaluation"] = {"success": False, "error": str(eval_err)}
+                            workflow_state.transition_to(
+                                WorkflowStage.COMPLETED,
+                                message="Feature-only workflow completed"
+                            )
                 elif stage == "model_training":
                     exec_result = await execute_model_training(
                         session, get_train_raw_data_path(workflow_state) or data_path, target_column, task_type, None

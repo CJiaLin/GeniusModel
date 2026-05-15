@@ -8,7 +8,7 @@ import os
 import sys
 import subprocess as sp
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 
@@ -23,6 +23,8 @@ from ..helpers import (
     save_data_onboarding_artifacts,
     get_effective_target_column,
     get_effective_task_type,
+    _detect_file_ext,
+    _read_data_file,
 )
 
 router = APIRouter()
@@ -38,21 +40,112 @@ async def upload_file(
         session_id = f"session_{int(datetime.now().timestamp() * 1000)}"
 
     validate_session_id(session_id)
-    dest = get_session_original_data_path(session_id)
-    dest.parent.mkdir(parents=True, exist_ok=True)
 
+    # 根据原始文件名获取扩展名
+    filename = file.filename or "uploaded_file.csv"
+    original_ext = os.path.splitext(filename)[1].lower() or ".csv"
+
+    # 先保存原始文件（保留原始格式）
+    asset_manager = get_asset_manager(session_id=session_id)
+    data_dir = asset_manager.session_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    original_path = data_dir / f"original_data{original_ext}"
     content = await file.read()
-    with open(dest, "wb") as f:
+    with open(original_path, "wb") as f:
         f.write(content)
 
-    save_data_onboarding_artifacts(session_id, dest, file.filename or "uploaded_file")
+    # 检测真实格式（防止扩展名不匹配）
+    real_ext = _detect_file_ext(original_path)
+    if real_ext != original_ext:
+        correct_path = data_dir / f"original_data{real_ext}"
+        original_path.rename(correct_path)
+        original_path = correct_path
+        print(f"[API] 文件真实格式为 {real_ext}，已修正文件名")
+
+    # 读取数据并统一保存为 UTF-8 CSV（供后续流程使用）
+    csv_path = data_dir / "original_data.csv"
+    try:
+        import pandas as pd
+        df = _read_data_file(original_path)
+        df.to_csv(csv_path, index=False, encoding="utf-8")
+        print(f"[API] 数据已转换为 CSV: {csv_path} ({len(df)} 行 × {len(df.columns)} 列)")
+    except Exception as e:
+        print(f"[API] 数据转换为 CSV 失败: {e}，将使用原始文件")
+        csv_path = original_path
+
+    save_data_onboarding_artifacts(session_id, csv_path, filename)
 
     return {
         "success": True,
         "session_id": session_id,
-        "filename": file.filename,
-        "file_path": str(dest),
+        "filename": filename,
+        "file_path": str(csv_path),
         "file_size": len(content),
+    }
+
+
+@router.post("/upload/multi")
+async def upload_multiple_files(
+    files: List[UploadFile] = File(...),
+    session_id: Optional[str] = None,
+):
+    """上传多个数据文件（用于多表聚合场景）"""
+    if not session_id:
+        session_id = f"session_{int(datetime.now().timestamp() * 1000)}"
+
+    validate_session_id(session_id)
+
+    asset_manager = get_asset_manager(session_id=session_id)
+    data_dir = asset_manager.session_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    file_paths = []
+    file_names = []
+
+    for i, file in enumerate(files):
+        filename = file.filename or f"table_{i}.csv"
+        file_names.append(filename)
+        original_ext = os.path.splitext(filename)[1].lower() or ".csv"
+
+        save_name = f"table_{i}{original_ext}"
+        save_path = data_dir / save_name
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+
+        real_ext = _detect_file_ext(save_path)
+        if real_ext != original_ext:
+            correct_path = data_dir / f"table_{i}{real_ext}"
+            save_path.rename(correct_path)
+            save_path = correct_path
+
+        csv_path = data_dir / f"table_{i}.csv"
+        try:
+            import pandas as pd
+            df = _read_data_file(save_path)
+            df.to_csv(csv_path, index=False, encoding="utf-8")
+            print(f"[API] 表 {i} ({filename}) 已转换: {len(df)} 行 × {len(df.columns)} 列")
+        except Exception as e:
+            print(f"[API] 表 {i} 转换失败: {e}，使用原始文件")
+            csv_path = save_path
+
+        file_paths.append(str(csv_path))
+
+    primary_path = file_paths[0] if file_paths else None
+    extra_paths = file_paths[1:] if len(file_paths) > 1 else []
+
+    if primary_path:
+        save_data_onboarding_artifacts(session_id, primary_path, file_names[0])
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "file_names": file_names,
+        "file_paths": file_paths,
+        "primary_path": primary_path,
+        "extra_paths": extra_paths,
+        "is_multi_table": len(file_paths) > 1,
     }
 
 

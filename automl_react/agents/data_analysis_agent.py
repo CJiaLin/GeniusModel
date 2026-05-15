@@ -63,7 +63,22 @@ class DataAnalysisAgent(ReActAgent):
     ) -> str:
         """读取数据并构建问题定义所需的数据事实。"""
         try:
-            df = pd.read_csv(data_path)
+            # 智能读取：检测文件格式和编码
+            with open(data_path, "rb") as f_check:
+                magic = f_check.read(4)
+            if magic == b'PK\x03\x04':
+                df = pd.read_excel(data_path)
+            elif data_path and data_path.endswith((".xlsx", ".xls")):
+                df = pd.read_excel(data_path)
+            else:
+                for enc in ("utf-8", "gbk", "gb2312", "latin-1"):
+                    try:
+                        df = pd.read_csv(data_path, encoding=enc)
+                        break
+                    except (UnicodeDecodeError, LookupError):
+                        continue
+                else:
+                    df = pd.read_csv(data_path, encoding="utf-8", errors="replace")
 
             self.data_info = {
                 "shape": df.shape,
@@ -182,6 +197,7 @@ class DataAnalysisAgent(ReActAgent):
         target_column: Optional[str] = None,
         task_type: Optional[str] = None,
         task_description: str = "",
+        workflow_mode: str = "full",
     ) -> str:
         """基于用户任务描述和数据事实生成结构化问题定义。"""
         self.data_path = data_path
@@ -195,18 +211,61 @@ class DataAnalysisAgent(ReActAgent):
 
 """
 
-        output_schema = {
-            "task_type": "classification/regression/other",
-            "target_column": "目标列名",
-            "prediction_target": "预测目标的业务表述",
-            "prediction_timing": "预测发生时点和可用信息边界",
-            "primary_metric": "主指标",
-            "secondary_metrics": ["辅助指标1", "辅助指标2"],
-            "business_constraints": ["业务约束1"],
-            "success_criteria": ["成功标准1"],
-            "assumptions": ["关键假设1"],
-            "open_questions": ["待确认问题1"],
-        }
+        # 根据工作流模式调整输出 schema 和提示
+        if workflow_mode == "schema_only":
+            output_schema = {
+                "task_type": "classification/regression/other",
+                "target_column": "目标列名（如适用）",
+                "prediction_target": "预测目标的业务表述",
+                "prediction_timing": "预测发生时点和可用信息边界",
+                "feature_design_goals": ["特征设计目标1", "特征设计目标2"],
+                "business_constraints": ["业务约束1"],
+                "assumptions": ["关键假设1"],
+                "open_questions": ["待确认问题1"],
+            }
+            mode_hint = """
+注意：当前为 Schema-only 模式（仅有数据字典，无实际数据），目标是输出特征工程设计方案。
+- 不需要输出评估指标（无数据无法计算）
+- 重点关注：业务目标 → 特征设计方向的映射、特征构造逻辑、时间窗口策略
+- prediction_timing 应明确特征可用的信息边界（防止数据穿越）
+"""
+        elif workflow_mode == "feature_only":
+            output_schema = {
+                "task_type": "classification/regression/other",
+                "target_column": "目标列名",
+                "prediction_target": "预测目标的业务表述",
+                "prediction_timing": "预测发生时点和可用信息边界",
+                "primary_metric": "主指标（特征质量指标，如 IV/PSI/VIF 等）",
+                "secondary_metrics": ["辅助指标1（如 KS、相关系数、缺失率等）"],
+                "business_constraints": ["业务约束1"],
+                "success_criteria": ["成功标准1（如 IV>0.02 的特征数量、PSI<0.1 等）"],
+                "assumptions": ["关键假设1"],
+                "open_questions": ["待确认问题1"],
+            }
+            mode_hint = """
+注意：当前为仅特征工程模式（有数据，目标是构建高质量特征，不训练完整模型）。
+- 评估指标应聚焦于特征质量而非模型效果，例如：
+  - IV (Information Value)：衡量特征对目标的区分能力
+  - PSI (Population Stability Index)：衡量特征分布稳定性
+  - VIF (Variance Inflation Factor)：衡量多重共线性
+  - KS / AUC（单特征）：单变量区分度
+  - 缺失率、覆盖率、零值率
+- success_criteria 应针对特征质量设定（如"IV>0.02 的特征不少于 N 个"）
+"""
+        else:
+            output_schema = {
+                "task_type": "classification/regression/other",
+                "target_column": "目标列名",
+                "prediction_target": "预测目标的业务表述",
+                "prediction_timing": "预测发生时点和可用信息边界",
+                "primary_metric": "主指标",
+                "secondary_metrics": ["辅助指标1", "辅助指标2"],
+                "business_constraints": ["业务约束1"],
+                "success_criteria": ["成功标准1"],
+                "assumptions": ["关键假设1"],
+                "open_questions": ["待确认问题1"],
+            }
+            mode_hint = ""
 
         prompt_template = self.config_loader.get_prompt("problem_definition", "problem_definition_prompt")
         user_input = prompt_template.format(
@@ -216,6 +275,9 @@ class DataAnalysisAgent(ReActAgent):
             candidate_task_type=task_type or "未提供",
             output_schema_json=json.dumps(output_schema, ensure_ascii=False, indent=2),
         )
+
+        if mode_hint:
+            user_input = mode_hint + "\n" + user_input
 
         result = self.run(user_input, stage="problem_definition")
         answer = result.get("answer", "")

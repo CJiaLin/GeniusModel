@@ -87,6 +87,7 @@ async def execute_problem_definition(
             target_column=workflow_state.get_context("target_column") if workflow_state else None,
             task_type=workflow_state.get_context("task_type") if workflow_state else None,
             task_description=generation_task_description,
+            workflow_mode=workflow_state.get_context("workflow_mode", "full") if workflow_state else "full",
         )
 
     payload = dict(agent.get_problem_definition_payload())
@@ -576,3 +577,58 @@ async def execute_model_evaluation(
         target_column=target_column,
         task_type=task_type,
     )
+
+
+async def execute_data_aggregation(
+    session: Dict,
+    modifications: Optional[str] = None,
+) -> Dict:
+    """执行数据聚合（CodeAct 模式）"""
+    print(f"[API] ========== 开始执行数据聚合 ==========")
+
+    agent = session["agents"].get("aggregation")
+    if not agent:
+        raise ValueError("数据聚合 Agent 不存在")
+
+    session_id = session.get("session_id", "default")
+    workflow_state = session.get("workflow_state")
+    asset_manager = get_asset_manager(session_id=session_id)
+
+    if not agent.aggregation_plan:
+        data_path = workflow_state.get_context("data_path")
+        extra_data_paths = workflow_state.get_context("extra_data_paths", [])
+        all_data_paths = [data_path] + extra_data_paths
+        agent.generate_aggregation_plan(
+            data_paths=all_data_paths,
+            target_column=workflow_state.get_context("target_column", ""),
+            task_type=workflow_state.get_context("task_type", "classification"),
+            task_description=workflow_state.get_context("task_description", ""),
+        )
+
+    code = agent.generate_aggregation_code(modifications)
+    aggregated_path = agent.aggregated_data_path
+    file_exists = aggregated_path and os.path.exists(aggregated_path)
+
+    if file_exists and workflow_state:
+        workflow_state.set_context("data_path", aggregated_path)
+        workflow_state.set_context("aggregated_data_path", aggregated_path)
+        workflow_state.save()
+        print(f"[API] data_path 已更新为聚合结果: {aggregated_path}")
+
+    execution_result = {
+        "success": file_exists,
+        "aggregated_data_path": aggregated_path if file_exists else None,
+        "generated_code": code,
+        "timestamp": datetime.now().isoformat(),
+        "stage": "data_aggregation",
+    }
+
+    asset_manager.save_data(
+        data=json.dumps(execution_result, ensure_ascii=False, indent=2),
+        filename="aggregation_result.json",
+        asset_type="aggregation",
+        metadata=execution_result,
+    )
+
+    print(f"[API] ========== 数据聚合执行完成 ==========")
+    return execution_result

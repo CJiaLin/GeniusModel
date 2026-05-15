@@ -231,6 +231,99 @@ class FeatureEngineeringAgent(ReActAgent):
         self.feature_plan = result.get("answer", "")
         return self.feature_plan
 
+    def generate_feature_plan_from_schema(
+        self,
+        schema_info: Dict[str, Any],
+        target_column: str = None,
+        task_type: str = "classification",
+        task_description: str = "",
+    ) -> str:
+        """
+        基于 Schema/数据字典生成特征工程方案（不执行）。
+
+        Args:
+            schema_info: 由 schema_parser.parse_schema() 返回的结构化 schema
+            target_column: 目标列名
+            task_type: 任务类型
+            task_description: 业务背景描述
+
+        Returns:
+            特征工程方案（Markdown 格式）
+        """
+        from ..utils.schema_parser import schema_to_text
+
+        self.target_column = target_column
+        self.task_type = task_type
+        self._task_description = task_description
+
+        # 构建 schema 文本描述
+        schema_text = schema_to_text(schema_info)
+        columns = schema_info.get("columns", [])
+
+        # 构建模拟 data_info（无实际数据）
+        self.data_info = {
+            "shape": (0, len(columns)),
+            "columns": [c.get("name", "") for c in columns],
+            "numeric_columns": [c.get("name", "") for c in columns if c.get("dtype", "").lower() in ("int", "float", "int64", "float64", "numeric", "number", "double", "decimal")],
+            "categorical_columns": [c.get("name", "") for c in columns if c.get("dtype", "").lower() in ("object", "string", "str", "varchar", "text", "category", "categorical")],
+            "target_dtype": "unknown",
+            "target_unique": 0,
+        }
+
+        task_context = ""
+        if task_description:
+            task_context = f"""
+## 用户建模背景和要求
+
+{task_description}
+
+**重要：请在特征工程方案中充分考虑用户的建模背景和要求。**
+
+"""
+
+        # 构建 LLM prompt
+        prompt = f"""# 特征工程方案生成（Schema 模式）
+
+**注意：当前仅提供了数据表结构和字段描述，没有实际数据。请基于 Schema 信息设计特征工程方案。**
+
+## 表结构信息
+
+{schema_text}
+
+## 任务信息
+
+- 目标列: {target_column or '未指定'}
+- 任务类型: {task_type}
+- 数值列: {', '.join(self.data_info['numeric_columns'][:20])}
+- 分类列: {', '.join(self.data_info['categorical_columns'][:20])}
+
+{task_context}
+
+## 步骤要求
+
+1. **学习领域知识（必做）**：使用 `read_skill` 工具**一次性**批量读取以下 skill 内容：
+   ```json
+   {{"skills": [{{"skill_name": "afrexai-ml-engineering-1.0.0", "sections": ["phase2-data-engineering"]}}, {{"skill_name": "feature-engineering-patterns-1.0.0", "sections": ["numeric-transforms", "categorical-encoding", "datetime-features", "interaction-features"]}}]}}
+   ```
+   阅读完成后再进行方案设计，确保方案覆盖 skill 中提到的各类特征工程模式
+2. 基于表结构和字段描述设计合理的特征工程方案
+3. 参照 skill 中的各模式，对所有有业务含义的字段逐一评估适用的特征构造方法
+4. 充分考虑用户建模背景和要求中的业务场景
+
+## 输出要求
+
+1. 说明每个特征的构造逻辑、预期效果和适用场景
+2. 包含特征处理策略：缺失值处理、编码方式、特征交叉、衍生特征等
+3. 不需要在此步骤生成代码，只需给出清晰的方案设计
+4. 方案应覆盖 skill 中的多种模式类型（数值变换、类别编码、时间特征、交叉特征等）
+
+请给出完整的特征工程方案设计。"""
+
+        result = self.run(prompt, stage="feature_engineering_schema_plan")
+        self.feature_plan = result.get("answer", "")
+
+        return self.feature_plan
+
     def get_modifiable_aspects(self) -> list:
         return ["特征构造方法", "编码策略", "特征选择", "交叉特征", "缺失值填充策略"]
 
@@ -258,6 +351,106 @@ class FeatureEngineeringAgent(ReActAgent):
             proposal=self.feature_plan,
             skills_referenced=skills_referenced
         )
+
+    def generate_feature_code_only(self, modifications: str = None) -> str:
+        """
+        仅生成特征工程代码模板，不执行（用于 schema_only 模式）。
+
+        Args:
+            modifications: 用户修改内容
+
+        Returns:
+            生成的特征工程代码
+        """
+        if not self.feature_plan:
+            raise ValueError("请先生成特征工程方案")
+
+        modifications_text = f"\n用户修改要求:\n{modifications}\n" if modifications else ""
+
+        # 构建数据信息摘要
+        data_info_text = ""
+        if self.data_info:
+            data_info_text = f"""
+## 数据信息
+
+- 字段数: {self.data_info['shape'][1]} 列
+- 目标列: {self.target_column or '未指定'}
+- 数值列: {', '.join(self.data_info['numeric_columns'][:15])}
+- 分类列: {', '.join(self.data_info['categorical_columns'][:15])}
+
+重要：请基于上述字段信息生成代码，代码应当使用 `input_path` 和 `output_path` 作为输入/输出参数。
+"""
+
+        # 用户背景要求（可能包含语言偏好如 SQL/Scala 等）
+        task_desc = getattr(self, '_task_description', '') or ''
+        task_context = f"\n## 用户要求\n\n{task_desc}\n" if task_desc else ""
+
+        prompt = f"""# 特征工程代码生成（Schema 模式 — 仅生成代码模板，不执行）
+
+## 特征工程方案
+
+{self.feature_plan}
+
+{data_info_text}
+{modifications_text}
+{task_context}
+
+## 要求
+
+请根据上述特征工程方案，生成完整可用的代码模板。
+
+默认生成 Python 代码（使用 pandas 实现）。如果用户在要求中指定了其他语言（如 SQL、Scala、R 等），请按用户要求的语言生成。
+
+代码要求：
+1. 包含完整的特征处理流程（特征构造、编码、缺失值处理等）
+2. 代码接受 `input_path`（输入数据路径）和 `output_path`（输出数据路径）作为参数
+3. 代码应当可以直接在实际数据上运行
+4. 在代码顶部通过注释说明输入/输出说明
+
+请生成完整代码，用对应语言的代码块包裹（如 ```python 或 ```sql）。"""
+
+        result = self.run(prompt, stage="feature_engineering_code_generation_schema")
+        answer = result.get("answer", "")
+
+        # 提取代码块（支持多种语言）
+        import re
+        code_blocks = re.findall(r'```(\w+)\s*\n(.*?)```', answer, re.DOTALL)
+
+        if code_blocks:
+            # 取最长的代码块作为主代码
+            lang, code = max(code_blocks, key=lambda x: len(x[1]))
+            self.feature_code = code
+
+            # 根据语言确定文件扩展名
+            ext_map = {"python": "py", "sql": "sql", "scala": "scala", "r": "R", "java": "java"}
+            ext = ext_map.get(lang.lower(), lang.lower())
+            filename = f"feature_engineering_template.{ext}"
+
+            self.asset_manager.save_code(
+                code=self.feature_code,
+                filename=filename,
+                metadata={
+                    "stage": "feature_engineering",
+                    "mode": "schema_only",
+                    "language": lang,
+                    "template": True,
+                    "not_executed": True,
+                }
+            )
+        else:
+            self.feature_code = answer
+            self.asset_manager.save_code(
+                code=self.feature_code,
+                filename="feature_engineering_template.py",
+                metadata={
+                    "stage": "feature_engineering",
+                    "mode": "schema_only",
+                    "template": True,
+                    "not_executed": True,
+                }
+            )
+
+        return self.feature_code
 
     def generate_feature_code(self, modifications: str = None) -> str:
         """

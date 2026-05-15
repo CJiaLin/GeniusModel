@@ -22,6 +22,7 @@ class WorkflowStage(Enum):
     PROBLEM_DEFINITION = "problem_definition"
     DATA_CONTRACT_CHECK = "data_contract_check"
     DATA_SPLITTING = "data_splitting"
+    DATA_AGGREGATION = "data_aggregation"
     DATA_CLEANING = "data_cleaning"  # 包含数据质量分析
     DATA_EXPLORATION = "data_exploration"  # 探索性数据分析（基于清洗后数据）
     FEATURE_ENGINEERING = "feature_engineering"
@@ -34,7 +35,14 @@ class WorkflowStage(Enum):
         return self.value
 
 
-# Define valid stage transitions
+class WorkflowMode:
+    """Workflow mode constants."""
+    FULL = "full"
+    SCHEMA_ONLY = "schema_only"
+    FEATURE_ONLY = "feature_only"
+
+
+# Define valid stage transitions (full mode — default)
 VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
     WorkflowStage.DATA_UPLOAD: [
         WorkflowStage.PROBLEM_DEFINITION,
@@ -42,8 +50,14 @@ VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
         WorkflowStage.ERROR,
     ],
     WorkflowStage.PROBLEM_DEFINITION: [
+        WorkflowStage.DATA_AGGREGATION,
         WorkflowStage.DATA_CONTRACT_CHECK,
         WorkflowStage.DATA_CLEANING,
+        WorkflowStage.ERROR,
+    ],
+    WorkflowStage.DATA_AGGREGATION: [
+        WorkflowStage.DATA_CONTRACT_CHECK,
+        WorkflowStage.DATA_SPLITTING,
         WorkflowStage.ERROR,
     ],
     WorkflowStage.DATA_CONTRACT_CHECK: [
@@ -62,9 +76,11 @@ VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
     ],
     WorkflowStage.DATA_EXPLORATION: [
         WorkflowStage.FEATURE_ENGINEERING,
+        WorkflowStage.MODEL_TRAINING,
         WorkflowStage.ERROR,
     ],
     WorkflowStage.FEATURE_ENGINEERING: [
+        WorkflowStage.DATA_EXPLORATION,
         WorkflowStage.MODEL_TRAINING,
         WorkflowStage.ERROR,
     ],
@@ -80,6 +96,7 @@ VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
     WorkflowStage.ERROR: [
         WorkflowStage.DATA_UPLOAD,
         WorkflowStage.PROBLEM_DEFINITION,
+        WorkflowStage.DATA_AGGREGATION,
         WorkflowStage.DATA_CONTRACT_CHECK,
         WorkflowStage.DATA_SPLITTING,
         WorkflowStage.DATA_CLEANING,
@@ -88,6 +105,46 @@ VALID_TRANSITIONS: dict[WorkflowStage, list[WorkflowStage]] = {
         WorkflowStage.MODEL_TRAINING,
     ],
 }
+
+# Schema-only mode: DATA_UPLOAD → PROBLEM_DEFINITION → FEATURE_ENGINEERING → COMPLETED
+TRANSITIONS_SCHEMA_ONLY: dict[WorkflowStage, list[WorkflowStage]] = {
+    WorkflowStage.DATA_UPLOAD: [WorkflowStage.PROBLEM_DEFINITION, WorkflowStage.ERROR],
+    WorkflowStage.PROBLEM_DEFINITION: [WorkflowStage.FEATURE_ENGINEERING, WorkflowStage.ERROR],
+    WorkflowStage.FEATURE_ENGINEERING: [WorkflowStage.COMPLETED, WorkflowStage.ERROR],
+    WorkflowStage.COMPLETED: [],
+    WorkflowStage.ERROR: [WorkflowStage.DATA_UPLOAD, WorkflowStage.PROBLEM_DEFINITION, WorkflowStage.FEATURE_ENGINEERING],
+}
+
+# Feature-only mode: DATA_UPLOAD → DATA_EXPLORATION → FEATURE_ENGINEERING → COMPLETED
+TRANSITIONS_FEATURE_ONLY: dict[WorkflowStage, list[WorkflowStage]] = {
+    WorkflowStage.DATA_UPLOAD: [WorkflowStage.DATA_EXPLORATION, WorkflowStage.FEATURE_ENGINEERING, WorkflowStage.ERROR],
+    WorkflowStage.DATA_EXPLORATION: [WorkflowStage.FEATURE_ENGINEERING, WorkflowStage.ERROR],
+    WorkflowStage.FEATURE_ENGINEERING: [WorkflowStage.COMPLETED, WorkflowStage.ERROR],
+    WorkflowStage.COMPLETED: [],
+    WorkflowStage.ERROR: [WorkflowStage.DATA_UPLOAD, WorkflowStage.DATA_EXPLORATION, WorkflowStage.FEATURE_ENGINEERING],
+}
+
+
+def get_transitions_for_mode(mode: str) -> dict[WorkflowStage, list[WorkflowStage]]:
+    """Get the valid transitions dict for a given workflow mode."""
+    if mode == WorkflowMode.SCHEMA_ONLY:
+        return TRANSITIONS_SCHEMA_ONLY
+    elif mode == WorkflowMode.FEATURE_ONLY:
+        return TRANSITIONS_FEATURE_ONLY
+    return VALID_TRANSITIONS
+
+
+def get_stages_for_mode(mode: str) -> list[str]:
+    """Get the ordered stage list for a given workflow mode."""
+    if mode == WorkflowMode.SCHEMA_ONLY:
+        return ["data_upload", "problem_definition", "feature_engineering"]
+    elif mode == WorkflowMode.FEATURE_ONLY:
+        return ["data_upload", "data_exploration", "feature_engineering"]
+    return [
+        "data_upload", "problem_definition", "data_aggregation",
+        "data_contract_check", "data_splitting", "data_cleaning",
+        "data_exploration", "feature_engineering", "model_training",
+    ]
 
 
 class StateTransitionError(Exception):
@@ -159,7 +216,9 @@ class WorkflowState:
         Returns:
             True if the transition is valid, False otherwise.
         """
-        valid_next_stages = VALID_TRANSITIONS.get(self.current_stage, [])
+        mode = self.context.get("workflow_mode", WorkflowMode.FULL)
+        transitions = get_transitions_for_mode(mode)
+        valid_next_stages = transitions.get(self.current_stage, [])
         return new_stage in valid_next_stages
 
     def transition_to(
@@ -179,9 +238,11 @@ class WorkflowState:
             StateTransitionError: If the transition is invalid and force is False.
         """
         if not force and not self._validate_transition(new_stage):
+            mode = self.context.get("workflow_mode", WorkflowMode.FULL)
+            transitions = get_transitions_for_mode(mode)
             raise StateTransitionError(
                 f"Invalid transition from {self.current_stage.value} to {new_stage.value}. "
-                f"Valid transitions: {[s.value for s in VALID_TRANSITIONS.get(self.current_stage, [])]}"
+                f"Valid transitions: {[s.value for s in transitions.get(self.current_stage, [])]}"
             )
 
         old_stage = self.current_stage
@@ -208,7 +269,9 @@ class WorkflowState:
         Returns:
             List of valid WorkflowStage values.
         """
-        return VALID_TRANSITIONS.get(self.current_stage, []).copy()
+        mode = self.context.get("workflow_mode", WorkflowMode.FULL)
+        transitions = get_transitions_for_mode(mode)
+        return transitions.get(self.current_stage, []).copy()
 
     def set_context(self, key: str, value: Any) -> None:
         """Set a context value.

@@ -95,9 +95,15 @@ class SkillSearchTool(BaseTool):
 
 
 class SkillReadInput(BaseModel):
-    skill_name: str = Field(..., description="技能包名称（如 'data-analysis-1.0.2'）")
+    skill_name: str = Field("", description="技能包名称（如 'data-analysis-1.0.2'）")
     section: str = Field(
         "", description="可选的章节名称（如 'techniques', 'phase2-data-engineering'）。不指定则返回技能概述"
+    )
+    sections: Optional[List[str]] = Field(
+        None, description="批量读取多个章节（如 ['numeric-transforms', 'categorical-encoding']）。指定此参数时 section 参数被忽略"
+    )
+    skills: Optional[List[Dict[str, Any]]] = Field(
+        None, description="批量读取多个技能的多个章节。格式: [{'skill_name': '...', 'sections': ['...']}]。指定此参数时其他参数被忽略"
     )
 
 
@@ -106,8 +112,11 @@ class SkillReadTool(BaseTool):
 
     name = "read_skill"
     description = (
-        "读取指定技能包的详细内容。可以读取完整概述或指定章节。"
-        "先用 search_skills 找到技能名和章节，再用此工具读取具体内容。"
+        "读取指定技能包的详细内容。支持三种模式：\n"
+        "1. 单章节: skill_name + section\n"
+        "2. 同一技能多章节: skill_name + sections（列表）\n"
+        "3. 跨技能批量读取: skills 参数（一次读取多个技能的多个章节）\n"
+        "推荐使用 skills 参数一次性读取所有需要的内容，减少调用次数。"
     )
     input_model = SkillReadInput
 
@@ -115,29 +124,40 @@ class SkillReadTool(BaseTool):
         self,
         skill_name: str = "",
         section: str = "",
+        sections: Optional[List[str]] = None,
+        skills: Optional[List[Dict[str, Any]]] = None,
         **kwargs
     ) -> ToolResult:
-        """读取技能内容"""
-        if not skill_name:
-            return ToolResult.error("必须指定 skill_name 参数")
-
+        """读取技能内容，支持批量模式"""
         try:
             loader = get_skill_loader()
-            skill = loader.get_skill(skill_name)
 
+            # 模式3: 跨技能批量读取
+            if skills:
+                return self._batch_read(loader, skills)
+
+            if not skill_name:
+                return ToolResult.error("必须指定 skill_name 参数")
+
+            skill = loader.get_skill(skill_name)
             if not skill:
                 available = loader.scan_skills()
                 return ToolResult.error(
                     f"技能 '{skill_name}' 不存在。可用技能: {available}"
                 )
 
+            # 模式2: 同一技能多章节
+            if sections:
+                return self._read_multiple_sections(loader, skill_name, sections)
+
+            # 模式1: 单章节或概述
             if section:
                 content = loader.get_section_content(skill_name, section)
                 if not content:
-                    sections = loader.list_sections(skill_name) or {}
+                    available_sections = loader.list_sections(skill_name) or {}
                     return ToolResult.error(
                         f"章节 '{section}' 不存在于技能 '{skill_name}' 中。"
-                        f"可用章节: {list(sections.keys())}"
+                        f"可用章节: {list(available_sections.keys())}"
                     )
             else:
                 content = skill.content or "(该技能无概述内容)"
@@ -152,3 +172,66 @@ class SkillReadTool(BaseTool):
 
         except Exception as e:
             return ToolResult.error(f"读取技能失败: {e}")
+
+    def _read_multiple_sections(self, loader, skill_name: str, sections: List[str]) -> ToolResult:
+        """读取同一技能的多个章节"""
+        parts = []
+        errors = []
+        for sec in sections:
+            content = loader.get_section_content(skill_name, sec)
+            if content:
+                parts.append(f"## {skill_name} / {sec}\n\n{content}")
+            else:
+                errors.append(sec)
+
+        if not parts:
+            available_sections = loader.list_sections(skill_name) or {}
+            return ToolResult.error(
+                f"所有章节均不存在。可用章节: {list(available_sections.keys())}"
+            )
+
+        header = (
+            "⚠️ 以下内容为技术参考，仅供方法指导，"
+            "所有决策必须基于当前会话的真实数据。\n\n"
+        )
+        result = header + "\n\n---\n\n".join(parts)
+        if errors:
+            result += f"\n\n(未找到的章节: {errors})"
+        return ToolResult.success(data=result)
+
+    def _batch_read(self, loader, skills: List[Dict[str, Any]]) -> ToolResult:
+        """跨技能批量读取"""
+        parts = []
+        errors = []
+        for item in skills:
+            s_name = item.get("skill_name", "")
+            s_sections = item.get("sections", [])
+            if not s_name:
+                continue
+            skill = loader.get_skill(s_name)
+            if not skill:
+                errors.append(f"技能 '{s_name}' 不存在")
+                continue
+            if not s_sections:
+                # 读取概述
+                content = skill.content or "(无概述)"
+                parts.append(f"## {s_name}\n\n{content}")
+            else:
+                for sec in s_sections:
+                    content = loader.get_section_content(s_name, sec)
+                    if content:
+                        parts.append(f"## {s_name} / {sec}\n\n{content}")
+                    else:
+                        errors.append(f"{s_name}/{sec}")
+
+        if not parts:
+            return ToolResult.error(f"未读取到任何内容。错误: {errors}")
+
+        header = (
+            "⚠️ 以下内容为技术参考，仅供方法指导，"
+            "所有决策必须基于当前会话的真实数据。\n\n"
+        )
+        result = header + "\n\n---\n\n".join(parts)
+        if errors:
+            result += f"\n\n(未找到: {errors})"
+        return ToolResult.success(data=result)

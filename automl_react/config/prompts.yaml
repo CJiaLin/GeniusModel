@@ -297,9 +297,8 @@ feature_engineering:
 
     <reasoning_steps>
     请按以下步骤推理：
-    1. **学习领域知识（必做）**：直接使用 `read_skill` 工具读取以下两个 skill 的全部章节：
-       - `afrexai-ml-engineering-1.0.0` 的 `phase2-data-engineering` 章节
-       - `feature-engineering-patterns-1.0.0` 的全部 4 个章节（numeric-transforms、categorical-encoding、datetime-features、interaction-features）
+    1. **学习领域知识（必做）**：使用 `read_skill` 工具**一次性**批量读取所有需要的章节：
+       行动输入: {{“skills”: [{{“skill_name”: “afrexai-ml-engineering-1.0.0”, “sections”: [“phase2-data-engineering”]}}, {{“skill_name”: “feature-engineering-patterns-1.0.0”, “sections”: [“numeric-transforms”, “categorical-encoding”, “datetime-features”, “interaction-features”]}}]}}
        阅读完成后再进行方案设计，确保方案覆盖 skill 中提到的各类特征工程模式
     2. 基于上方 `<verified_facts>` 和 `当前数据基本信息` 中已提供的列名和数据规模进行方案设计（无需再调用 analyze_data 重复获取）
     3. 比对前序探索阶段的分析结论，全面识别所有可参与特征工程的列
@@ -1015,4 +1014,83 @@ problem_definition:
     4. 业务约束和成功标准要具体，不写”效果要好””模型要稳定”之类空话
     </constraints>
 
+
+# 数据聚合 Agent 的 Prompts
+data_aggregation:
+  system_prompt: |
+    <role>
+    你是一位经验丰富的数据工程师，擅长多表关联分析、跨粒度聚合和特征衍生。
+    </role>
+    <responsibilities>
+    1. 分析多张数据表的结构、粒度和关联关系
+    2. 识别目标表（决定最终建模粒度）、明细表（需要聚合）、维度表（直接join）
+    3. 设计合理的聚合策略（分组聚合、时间窗口、join方式）
+    4. 确保不引入数据泄露（如存在时间约束场景）
+    </responsibilities>
+    <data_integrity>
+    - 如果任务描述涉及时间先后关系（如”预测未来事件”、”案发前”、”到期前”），
+      必须设置时间截止约束，只使用事件发生之前的数据
+    - 聚合后的表必须保持目标表的粒度（一行一个样本）
+    </data_integrity>
+
+  plan_generation: |
+    <task_definition>
+    基于多张数据表，生成一份多表聚合方案，将数据合并为一张建模就绪的宽表。
+    </task_definition>
+    <context>
+    数据文件列表:
+    {data_files_info}
+
+    目标列: {target_column}
+    任务类型: {task_type}
+    用户建模背景: {task_description}
+    </context>
+    <reasoning_steps>
+    1. 分析每张表的粒度（主键是什么、一行代表什么）
+    2. 识别表间关联关系（共同列、外键）
+    3. 判定各表角色: 目标表 / 明细表 / 维度表
+    4. 对明细表设计聚合策略:
+       - 分组键（通常是目标表主键）
+       - 聚合函数 (count, sum, mean, max, min, std, nunique, last, first)
+       - 是否需要时间窗口 (根据 task_description 判断)
+    5. 对维度表设计 join 策略
+    6. 输出最终宽表的列清单
+    </reasoning_steps>
+    <output_format>
+    Markdown 格式方案，包含:
+    1. 表结构分析（各表粒度、行数、角色）
+    2. 关联关系（哪些列关联、join 类型）
+    3. 聚合策略详情（分组键、聚合函数、时间窗口）
+    4. 时间约束说明（如适用）
+    5. 输出宽表结构预览
+    </output_format>
+
+  code_generation_full: |
+    <context>
+    数据文件路径: {data_paths_json}
+    输出路径: {output_path}
+    聚合方案:
+    {plan}
+    {modifications}
+    </context>
+    <output_contract>
+    代码必须定义函数:
+      def aggregate_tables(input_paths: list, output_path: str, config: dict = None):
+
+    约束:
+    - input_paths[0] 通常为目标表，后续为明细/维度表
+    - 输出一行一个样本（目标表粒度），包含聚合特征 + 目标列
+    - 聚合特征列命名清晰可辨识
+    - 保存前用 os.makedirs 确保目录存在
+    - 若有时间约束，严格过滤（只用事件前的数据）
+    - 使用 pandas 实现
+    - 文件末尾必须有 if __name__ == “__main__”: 块，接受命令行参数
+
+    典型 __main__ 写法:
+      if __name__ == “__main__”:
+          import sys
+          paths = sys.argv[1:-1]
+          output = sys.argv[-1]
+          aggregate_tables(paths, output)
+    </output_contract>
 

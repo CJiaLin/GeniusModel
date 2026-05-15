@@ -2,7 +2,7 @@
 # 大模型配置，支持多种 LLM 提供商
 
 # 默认使用的模型
-default_model: "qwen3.6-plus" # "claude-opus-4-6"
+default_model: "qwen3.6-plus" # "qwen3.6-plus"
 
 # 模型配置
 models:
@@ -14,7 +14,7 @@ models:
     temperature: 1.0
     max_tokens: 65536
     timeout: 120
-    api_key: "${MOONSHOT_API_KEY}"
+    api_key: "sk-fzRoH8YfHjSDBcaGooMErOVBKsl9frstezHVRGIP3UBgFOUa" # "${MOONSHOT_API_KEY}"
     base_url: "https://api.moonshot.cn/v1"
 
   claude-opus-4-6:
@@ -23,7 +23,7 @@ models:
     temperature: 1.0
     max_tokens: 65536
     timeout: 600000
-    api_key: "${CLAUDE_API_KEY}"
+    api_key: "sk-UbK2DTVQKLO0G5_j9vT2vLxAT6NUWx3mrY4JWfh3C0M" # "${MOONSHOT_API_KEY}"
     base_url: "https://api.cloubic.com/v1"
 
   qwen3.6-plus:
@@ -32,7 +32,7 @@ models:
     temperature: 1.0
     max_tokens: 65536
     timeout: 120
-    api_key: "${QWEN_API_KEY}"
+    api_key: "sk-2ff94cd887604e60baeb2ef66f58fad0" # "${MOONSHOT_API_KEY}"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # 各阶段使用的模型（可以覆盖默认模型）

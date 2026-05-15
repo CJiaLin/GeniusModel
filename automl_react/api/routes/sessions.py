@@ -70,9 +70,9 @@ async def restore_session(session_id: str, registry: AppRegistry = Depends(get_r
 
     # 阶段顺序
     stage_keys = [
-        "data_upload", "problem_definition", "data_contract_check",
-        "data_splitting", "data_cleaning", "data_exploration",
-        "feature_engineering", "model_training",
+        "data_upload", "problem_definition", "data_aggregation",
+        "data_contract_check", "data_splitting", "data_cleaning",
+        "data_exploration", "feature_engineering", "model_training",
     ]
 
     # 根据 confirmation history 重建 stage_data 和 stage_status
@@ -120,6 +120,7 @@ async def restore_session(session_id: str, registry: AppRegistry = Depends(get_r
     generated_code: Dict[str, str] = {}
     code_dir = asset_manager.session_dir / "code"
     code_file_map = {
+        "data_aggregation": "aggregation.py",
         "data_cleaning": "cleaning.py",
         "feature_engineering": "feature_engineering.py",
         "model_training": "model_training.py",

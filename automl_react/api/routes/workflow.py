@@ -10,9 +10,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 
 from automl_react.workflow import WorkflowState, WorkflowStage
+from automl_react.workflow.workflow_state import WorkflowMode, get_stages_for_mode
 from automl_react.confirmation import ConfirmationManager
 
 from ..deps import validate_session_id, get_registry
@@ -25,6 +26,7 @@ from ..helpers import (
 )
 from ..services.stage_runner import (
     run_problem_definition,
+    run_data_aggregation,
     run_data_contract_check,
     run_data_splitting,
     run_data_exploration,
@@ -39,10 +41,13 @@ router = APIRouter()
 class StartWorkflowRequest(BaseModel):
     session_id: str
     data_path: Optional[str] = None
-    target_column: str
+    target_column: str = ""
     task_type: str = "classification"
     model: str = "claude-sonnet-4-20250514-thinking"
     task_description: str = ""
+    workflow_mode: str = "full"  # "full" | "schema_only" | "feature_only"
+    schema_file_path: Optional[str] = None  # for schema_only mode
+    extra_data_paths: Optional[List[str]] = None  # 额外的数据文件路径列表（多表聚合）
 
 
 @router.post("/workflow/start")
@@ -52,11 +57,17 @@ async def start_workflow(request: StartWorkflowRequest, registry: AppRegistry = 
     validate_session_id(session_id)
     session = await registry.get_session(session_id)
 
-    # 确保数据路径落入会话资产目录
-    data_path = ensure_session_data_path(session_id, request.data_path)
-
-    if not data_path:
-        raise HTTPException(status_code=400, detail="数据路径不存在")
+    # 根据 workflow_mode 处理数据路径
+    if request.workflow_mode == "schema_only":
+        # schema_only 模式：data_path 非必须，schema_file_path 或 task_description 即可
+        data_path = ensure_session_data_path(session_id, request.data_path) if request.data_path else None
+        schema_file_path = ensure_session_data_path(session_id, request.schema_file_path) if request.schema_file_path else None
+    else:
+        # full / feature_only 模式：需要实际数据
+        data_path = ensure_session_data_path(session_id, request.data_path)
+        schema_file_path = None
+        if not data_path:
+            raise HTTPException(status_code=400, detail="数据路径不存在")
 
     # 创建或获取工作流状态
     workflow_state = session.get("workflow_state")
@@ -71,6 +82,10 @@ async def start_workflow(request: StartWorkflowRequest, registry: AppRegistry = 
         "task_type": request.task_type,
         "model": request.model,
         "task_description": request.task_description,
+        "workflow_mode": request.workflow_mode,
+        "schema_file_path": schema_file_path,
+        "extra_data_paths": request.extra_data_paths or [],
+        "is_multi_table": bool(request.extra_data_paths),
     })
     workflow_state.save()
 
@@ -84,6 +99,7 @@ async def start_workflow(request: StartWorkflowRequest, registry: AppRegistry = 
         "session_id": session_id,
         "current_stage": workflow_state.current_stage.value,
         "data_path": data_path,
+        "workflow_mode": request.workflow_mode,
     }
 
 
@@ -118,6 +134,12 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
     requested_stage = stage
     stage = resolve_stage_alias(stage)
 
+    # 模式守卫：检查该阶段是否在当前模式的有效阶段列表中
+    mode = workflow_state.get_context("workflow_mode", WorkflowMode.FULL)
+    mode_stages = get_stages_for_mode(mode)
+    if stage not in mode_stages and stage not in ("completed", "error"):
+        raise HTTPException(status_code=400, detail=f"阶段 '{stage}' 不在当前 '{mode}' 模式中可用")
+
     # 更新工作流状态
     target_stage = WorkflowStage(stage)
     if workflow_state.current_stage != target_stage:
@@ -144,6 +166,11 @@ async def run_stage(session_id: str, stage: str, background_tasks: BackgroundTas
         return run_problem_definition(
             session, workflow_state, confirmation_manager,
             data_path, session_id, requested_stage,
+        )
+    elif stage == "data_aggregation":
+        return run_data_aggregation(
+            session, workflow_state, confirmation_manager,
+            data_path, session_id,
         )
     elif stage == "data_contract_check":
         return run_data_contract_check(

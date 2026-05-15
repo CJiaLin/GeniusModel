@@ -84,6 +84,11 @@ class PipelineGenerator:
             code 目录路径
         """
         stage_codes = self.collect_stage_codes()
+
+        # 如果没有任何阶段代码，跳过生成
+        if not stage_codes:
+            return str(self.asset_manager.session_dir / "code")
+
         split_config = self._load_split_config()
 
         # 生成 pipeline.py 编排器，保存到 code/ 目录
@@ -91,7 +96,7 @@ class PipelineGenerator:
             target_column=target_column,
             task_type=task_type,
             split_config=split_config,
-            has_evaluation="model_evaluation" in stage_codes,
+            available_stages=stage_codes,
         )
         self.asset_manager.save_code(
             code=orchestrator,
@@ -113,26 +118,140 @@ class PipelineGenerator:
         target_column: str,
         task_type: str,
         split_config: Dict[str, float],
-        has_evaluation: bool = True,
+        available_stages: Dict[str, str] = None,
     ) -> str:
-        """生成 pipeline.py 编排脚本。"""
+        """生成 pipeline.py 编排脚本，仅包含实际完成的阶段。"""
+        if available_stages is None:
+            available_stages = {}
+
+        has_cleaning = "data_cleaning" in available_stages
+        has_feature = "feature_engineering" in available_stages
+        has_training = "model_training" in available_stages
+        has_evaluation = "model_evaluation" in available_stages
+
         train_ratio = split_config.get("train_ratio", 0.6)
         valid_ratio = split_config.get("valid_ratio", 0.2)
         test_ratio = split_config.get("test_ratio", 0.2)
 
-        eval_import = ""
-        eval_train_block = ""
-        eval_predict_block = ""
-
+        # 动态构建 import 语句
+        imports = []
+        if has_cleaning:
+            imports.append("from cleaning import clean_data")
+        if has_feature:
+            imports.append("from feature_engineering import engineer_features")
+        if has_training:
+            imports.append("from model_training import train_model")
         if has_evaluation:
-            eval_import = """from model_evaluation import load_model_artifact, predict_from_artifact, evaluate_predictions"""
-            eval_train_block = f'''
+            imports.append("from model_evaluation import load_model_artifact, predict_from_artifact, evaluate_predictions")
+        imports_block = "\n".join(imports)
+
+        # 动态构建训练模式流程
+        train_steps = []
+        step_num = 1
+        total_steps = 1 + int(has_cleaning) + int(has_feature) + int(has_training) + int(has_evaluation)
+
+        # 数据切分（总是存在）
+        train_steps.append(f'''
+    # ── 数据切分 ──
+    print("=" * 60)
+    print("[{step_num}/{total_steps}] 数据切分")
+    print("=" * 60)
+    df = pd.read_csv(args.data)
+    print(f"原始数据形状: {{df.shape}}")
+
+    train_df, temp_df = train_test_split(df, test_size={1 - train_ratio}, random_state=42)
+    relative_valid = {valid_ratio} / ({valid_ratio} + {test_ratio})
+    valid_df, test_df = train_test_split(temp_df, test_size=1 - relative_valid, random_state=42)
+
+    train_raw_path = str(data_dir / "train_raw.csv")
+    valid_raw_path = str(data_dir / "valid_raw.csv")
+    test_raw_path = str(data_dir / "test_raw.csv")
+    train_df.to_csv(train_raw_path, index=False)
+    valid_df.to_csv(valid_raw_path, index=False)
+    test_df.to_csv(test_raw_path, index=False)
+    print(f"切分完成: train={{len(train_df)}}, valid={{len(valid_df)}}, test={{len(test_df)}}")''')
+        step_num += 1
+
+        if has_cleaning:
+            train_steps.append(f'''
+    # ── 数据清洗 ──
+    print("\\n" + "=" * 60)
+    print("[{step_num}/{total_steps}] 数据清洗")
+    print("=" * 60)
+    cleaned_train = str(data_dir / "cleaned_train.csv")
+    cleaned_valid = str(data_dir / "cleaned_valid.csv")
+    cleaned_test = str(data_dir / "cleaned_test.csv")
+    clean_data(train_raw_path, cleaned_train, train_raw_path)
+    print("  训练集清洗完成")
+    clean_data(valid_raw_path, cleaned_valid, train_raw_path)
+    print("  验证集清洗完成")
+    clean_data(test_raw_path, cleaned_test, train_raw_path)
+    print("  测试集清洗完成")''')
+            step_num += 1
+
+        # 特征工程输入路径取决于是否有清洗
+        fe_input_train = "cleaned_train" if has_cleaning else "train_raw_path"
+        fe_input_valid = "cleaned_valid" if has_cleaning else "valid_raw_path"
+        fe_input_test = "cleaned_test" if has_cleaning else "test_raw_path"
+        fe_ref = "cleaned_train" if has_cleaning else "train_raw_path"
+
+        if has_feature:
+            train_steps.append(f'''
+    # ── 特征工程 ──
+    print("\\n" + "=" * 60)
+    print("[{step_num}/{total_steps}] 特征工程")
+    print("=" * 60)
+    features_train = str(data_dir / "features_train.csv")
+    features_valid = str(data_dir / "features_valid.csv")
+    features_test = str(data_dir / "features_test.csv")
+    engineer_features({fe_input_train}, features_train, {fe_ref})
+    print("  训练集特征工程完成")
+    engineer_features({fe_input_valid}, features_valid, {fe_ref})
+    print("  验证集特征工程完成")
+    engineer_features({fe_input_test}, features_test, {fe_ref})
+    print("  测试集特征工程完成")''')
+            step_num += 1
+
+        # 模型训练输入路径取决于之前的阶段
+        if has_feature:
+            model_input_train = "features_train"
+            model_input_valid = "features_valid"
+            model_input_test = "features_test"
+        elif has_cleaning:
+            model_input_train = "cleaned_train"
+            model_input_valid = "cleaned_valid"
+            model_input_test = "cleaned_test"
+        else:
+            model_input_train = "train_raw_path"
+            model_input_valid = "valid_raw_path"
+            model_input_test = "test_raw_path"
+
+        if has_training:
+            train_steps.append(f'''
+    # ── 模型训练 ──
+    print("\\n" + "=" * 60)
+    print("[{step_num}/{total_steps}] 模型训练")
+    print("=" * 60)
+    result = train_model(
+        train_path={model_input_train},
+        valid_path={model_input_valid},
+        test_path={model_input_test},
+        model_dir=str(model_dir),
+        target_column=target_column,
+        summary_path=str(model_dir / "training_summary.json"),
+    )
+    model_path = result["model_path"]
+    print(f"  模型训练完成，保存至: {{model_path}}")''')
+            step_num += 1
+
+        if has_evaluation and has_training:
+            train_steps.append(f'''
     # ── 模型评估 (测试集) ──
     print("\\n" + "=" * 60)
-    print("[5/5] 模型评估 (测试集)")
+    print("[{step_num}/{total_steps}] 模型评估 (测试集)")
     print("=" * 60)
     try:
-        eval_df = pd.read_csv(features_test)
+        eval_df = pd.read_csv({model_input_test})
         if target_column in eval_df.columns:
             y_true = eval_df[target_column]
             eval_X = eval_df.drop(columns=[target_column, "Id"], errors="ignore")
@@ -148,15 +267,60 @@ class PipelineGenerator:
         else:
             print(f"  测试集不包含目标列 {{target_column}}，跳过评估")
     except Exception as e:
-        print(f"  评估失败: {{e}}")'''
+        print(f"  评估失败: {{e}}")''')
 
-            eval_predict_block = f'''
+        train_block = "\n".join(train_steps)
+
+        # 动态构建推理模式流程
+        predict_steps = []
+        predict_step_num = 1
+        predict_total = int(has_cleaning) + int(has_feature) + 1  # +1 for prediction
+
+        if has_cleaning:
+            predict_steps.append(f'''
+    # ── 数据清洗 ──
+    print("=" * 60)
+    print("[{predict_step_num}/{predict_total}] 数据清洗")
+    print("=" * 60)
+    cleaned_path = str(tmp_dir / "cleaned.csv")
+    clean_data(args.data, cleaned_path, train_data_path)
+
+    cleaned_train_ref = str(tmp_dir / "cleaned_train_ref.csv")
+    if train_data_path != args.data:
+        clean_data(train_data_path, cleaned_train_ref, train_data_path)
+    else:
+        cleaned_train_ref = cleaned_path''')
+            predict_step_num += 1
+
+        predict_fe_input = "cleaned_path" if has_cleaning else "args.data"
+        predict_fe_ref = "cleaned_train_ref" if has_cleaning else "train_data_path"
+
+        if has_feature:
+            predict_steps.append(f'''
+    # ── 特征工程 ──
+    print("\\n" + "=" * 60)
+    print("[{predict_step_num}/{predict_total}] 特征工程")
+    print("=" * 60)
+    features_path = str(tmp_dir / "features.csv")
+    engineer_features({predict_fe_input}, features_path, {predict_fe_ref})''')
+            predict_step_num += 1
+
+        # 预测输入
+        if has_feature:
+            predict_input = "features_path"
+        elif has_cleaning:
+            predict_input = "cleaned_path"
+        else:
+            predict_input = "args.data"
+
+        if has_evaluation:
+            predict_steps.append(f'''
     # ── 预测 ──
     print("\\n" + "=" * 60)
-    print("[5/5] 模型预测")
+    print("[{predict_step_num}/{predict_total}] 模型预测")
     print("=" * 60)
     model_artifact = load_model_artifact(model_path)
-    df = pd.read_csv(features_path)
+    df = pd.read_csv({predict_input})
     drop_cols = [c for c in [target_column, "Id"] if c in df.columns]
     X = df.drop(columns=drop_cols) if drop_cols else df.copy()
     predictions, diagnostics = predict_from_artifact(model_artifact, X, None, None)
@@ -170,7 +334,6 @@ class PipelineGenerator:
     print(f"  预测完成: {{len(predictions)}} 条记录")
     print(f"  结果保存至: {{output_path}}")
 
-    # 评估（如果有真实标签）
     if target_column in df.columns:
         y_true = df[target_column]
         eval_metrics = evaluate_predictions(
@@ -179,7 +342,34 @@ class PipelineGenerator:
         )
         print("\\n  评估指标:")
         for k, v in eval_metrics.items():
-            print(f"    {{k}}: {{v:.4f}}" if isinstance(v, float) else f"    {{k}}: {{v}}")'''
+            print(f"    {{k}}: {{v:.4f}}" if isinstance(v, float) else f"    {{k}}: {{v}}")''')
+        else:
+            predict_steps.append(f'''
+    # ── 预测 ──
+    print("\\n" + "=" * 60)
+    print("[{predict_step_num}/{predict_total}] 模型预测")
+    print("=" * 60)
+    df = pd.read_csv({predict_input})
+    drop_cols = [c for c in [target_column, "Id"] if c in df.columns]
+    X = df.drop(columns=drop_cols) if drop_cols else df.copy()
+    model_artifact = pickle.load(open(model_path, "rb"))
+    if hasattr(model_artifact, "predict"):
+        predictions = model_artifact.predict(X)
+    else:
+        predictions = model_artifact["model"].predict(X)
+
+    result_df = pd.DataFrame({{"prediction": predictions}})
+    if "Id" in df.columns:
+        result_df.insert(0, "Id", df["Id"].values)
+    output_path = str(output_dir / "predictions.csv")
+    result_df.to_csv(output_path, index=False)
+    print(f"  预测完成: {{len(predictions)}} 条记录")
+    print(f"  结果保存至: {{output_path}}")''')
+
+        predict_block = "\n".join(predict_steps)
+
+        # 判断是否需要推理模式（只有存在模型训练时才有推理）
+        mode_choices = '["train", "predict"]' if has_training else '["train"]'
 
         script = f'''#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -188,10 +378,11 @@ AutoML 全流程 Pipeline 脚本
 
 生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 会话ID: {self.session_id}
+可用阶段: {", ".join(available_stages.keys())}
 
 使用说明:
   训练模式:  python pipeline.py --mode train --data raw_data.csv
-  推理模式:  python pipeline.py --mode predict --data new_data.csv --model output/model.pkl --train-data raw_data.csv
+{"  推理模式:  python pipeline.py --mode predict --data new_data.csv --model output/model.pkl --train-data raw_data.csv" if has_training else ""}
 """
 
 import os
@@ -208,17 +399,14 @@ from pathlib import Path
 # 将当前目录加入 path，以便 import 同目录的阶段模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from cleaning import clean_data
-from feature_engineering import engineer_features
-from model_training import train_model
-{eval_import}
+{imports_block}
 
 warnings.filterwarnings('ignore')
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="AutoML Pipeline")
-    parser.add_argument("--mode", choices=["train", "predict"], required=True)
+    parser.add_argument("--mode", choices={mode_choices}, required=True)
     parser.add_argument("--data", required=True, help="输入数据路径 (CSV)")
     parser.add_argument("--model", default=None, help="模型路径 (predict 模式必需)")
     parser.add_argument("--train-data", default=None, help="训练集路径 (predict 模式下用于计算统计量)")
@@ -240,76 +428,17 @@ def run_training(args):
     model_dir.mkdir(parents=True, exist_ok=True)
 
     target_column = args.target
-
-    # ── 数据切分 ──
-    print("=" * 60)
-    print("[1/5] 数据切分")
-    print("=" * 60)
-    df = pd.read_csv(args.data)
-    print(f"原始数据形状: {{df.shape}}")
-
-    train_df, temp_df = train_test_split(df, test_size={1 - train_ratio}, random_state=42)
-    relative_valid = {valid_ratio} / ({valid_ratio} + {test_ratio})
-    valid_df, test_df = train_test_split(temp_df, test_size=1 - relative_valid, random_state=42)
-
-    train_raw_path = str(data_dir / "train_raw.csv")
-    valid_raw_path = str(data_dir / "valid_raw.csv")
-    test_raw_path = str(data_dir / "test_raw.csv")
-    train_df.to_csv(train_raw_path, index=False)
-    valid_df.to_csv(valid_raw_path, index=False)
-    test_df.to_csv(test_raw_path, index=False)
-    print(f"切分完成: train={{len(train_df)}}, valid={{len(valid_df)}}, test={{len(test_df)}}")
-
-    # ── 数据清洗 ──
-    print("\\n" + "=" * 60)
-    print("[2/5] 数据清洗")
-    print("=" * 60)
-    cleaned_train = str(data_dir / "cleaned_train.csv")
-    cleaned_valid = str(data_dir / "cleaned_valid.csv")
-    cleaned_test = str(data_dir / "cleaned_test.csv")
-    clean_data(train_raw_path, cleaned_train, train_raw_path)
-    print("  训练集清洗完成")
-    clean_data(valid_raw_path, cleaned_valid, train_raw_path)
-    print("  验证集清洗完成")
-    clean_data(test_raw_path, cleaned_test, train_raw_path)
-    print("  测试集清洗完成")
-
-    # ── 特征工程 ──
-    print("\\n" + "=" * 60)
-    print("[3/5] 特征工程")
-    print("=" * 60)
-    features_train = str(data_dir / "features_train.csv")
-    features_valid = str(data_dir / "features_valid.csv")
-    features_test = str(data_dir / "features_test.csv")
-    engineer_features(cleaned_train, features_train, cleaned_train)
-    print("  训练集特征工程完成")
-    engineer_features(cleaned_valid, features_valid, cleaned_train)
-    print("  验证集特征工程完成")
-    engineer_features(cleaned_test, features_test, cleaned_train)
-    print("  测试集特征工程完成")
-
-    # ── 模型训练 ──
-    print("\\n" + "=" * 60)
-    print("[4/5] 模型训练")
-    print("=" * 60)
-    result = train_model(
-        train_path=features_train,
-        valid_path=features_valid,
-        test_path=features_test,
-        model_dir=str(model_dir),
-        target_column=target_column,
-        summary_path=str(model_dir / "training_summary.json"),
-    )
-    model_path = result["model_path"]
-    print(f"  模型训练完成，保存至: {{model_path}}")
-{eval_train_block}
+{train_block}
 
     print("\\n" + "=" * 60)
     print("训练流程完成!")
     print("=" * 60)
     print(f"输出目录: {{output_dir}}")
 
+'''
 
+        if has_training:
+            script += f'''
 # ============================================
 # 推理模式
 # ============================================
@@ -326,35 +455,15 @@ def run_predict(args):
     model_path = args.model
     target_column = args.target
 
-    # ── 解析训练集路径 ──
     train_data_path = args.train_data
     if train_data_path is None:
         print("WARNING: 未指定 --train-data，使用预测数据自身计算统计量（不推荐）")
         train_data_path = args.data
+{predict_block}
 
-    # ── 数据清洗 ──
-    print("=" * 60)
-    print("[1/5] 数据清洗")
-    print("=" * 60)
-    cleaned_path = str(tmp_dir / "cleaned.csv")
-    clean_data(args.data, cleaned_path, train_data_path)
+'''
 
-    # 清洗训练集参考（供特征工程计算统计量）
-    cleaned_train_ref = str(tmp_dir / "cleaned_train_ref.csv")
-    if train_data_path != args.data:
-        clean_data(train_data_path, cleaned_train_ref, train_data_path)
-    else:
-        cleaned_train_ref = cleaned_path
-
-    # ── 特征工程 ──
-    print("\\n" + "=" * 60)
-    print("[2/5] 特征工程")
-    print("=" * 60)
-    features_path = str(tmp_dir / "features.csv")
-    engineer_features(cleaned_path, features_path, cleaned_train_ref)
-{eval_predict_block}
-
-
+        script += '''
 # ============================================
 # 入口
 # ============================================
@@ -362,7 +471,9 @@ if __name__ == "__main__":
     args = parse_args()
     if args.mode == "train":
         run_training(args)
-    elif args.mode == "predict":
+'''
+        if has_training:
+            script += '''    elif args.mode == "predict":
         run_predict(args)
 '''
         return script
@@ -425,22 +536,20 @@ if __name__ == "__main__":
         cleaning_source = self.asset_manager.read_asset("code", "cleaning.py")
         fe_source = self.asset_manager.read_asset("code", "feature_engineering.py")
 
-        if not cleaning_source or not fe_source:
-            raise ValueError("缺少 cleaning.py 或 feature_engineering.py，无法组装 Pipeline")
-
         # 2. 加载已训练模型 artifact
         model_path = self.asset_manager.session_dir / "models" / "trained_model.pkl"
         if not model_path.exists():
-            raise ValueError(f"模型文件不存在: {model_path}")
+            raise ValueError(f"模型文件不存在: {model_path}，无法组装 sklearn Pipeline")
         model_artifact = joblib.load(model_path)
 
-        # 3. 组装 Pipeline
-        steps = [
-            ("cleaning", DataFrameStageTransformer(cleaning_source, "clean_data", "cleaning")),
-            ("feature_engineering", DataFrameStageTransformer(fe_source, "engineer_features", "feature_engineering")),
-            ("drop_target", TargetColumnSplitter(target_column)),
-            ("model", ModelStepWrapper(model_artifact, target_column, task_type)),
-        ]
+        # 3. 组装 Pipeline（仅包含实际存在的阶段）
+        steps = []
+        if cleaning_source:
+            steps.append(("cleaning", DataFrameStageTransformer(cleaning_source, "clean_data", "cleaning")))
+        if fe_source:
+            steps.append(("feature_engineering", DataFrameStageTransformer(fe_source, "engineer_features", "feature_engineering")))
+        steps.append(("drop_target", TargetColumnSplitter(target_column)))
+        steps.append(("model", ModelStepWrapper(model_artifact, target_column, task_type)))
         pipeline = SklearnPipeline(steps)
 
         # 4. 用原始训练数据 fit（bake 训练引用到各 transformer 中）

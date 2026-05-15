@@ -14,39 +14,94 @@ from automl_react.assets import get_asset_manager
 from automl_react.workflow import WorkflowState
 
 
-def get_session_original_data_path(session_id: str) -> Path:
+def get_session_original_data_path(session_id: str, ext: str = ".csv") -> Path:
     """获取会话内统一的原始数据资产路径。"""
     asset_manager = get_asset_manager(session_id=session_id)
-    return asset_manager.session_dir / "data" / "original_data.csv"
+    return asset_manager.session_dir / "data" / f"original_data{ext}"
+
+
+def _detect_file_ext(file_path: Path) -> str:
+    """检测文件真实类型（基于魔数和扩展名）。"""
+    ext = file_path.suffix.lower()
+    try:
+        with open(file_path, "rb") as f:
+            magic = f.read(4)
+        if magic == b'PK\x03\x04':
+            return ".xlsx"
+    except Exception:
+        pass
+    return ext if ext else ".csv"
+
+
+def _read_data_file(file_path: Path) -> "pd.DataFrame":
+    """智能读取数据文件（支持 csv/xlsx/xls，自动检测编码）。"""
+    import pandas as pd
+
+    ext = _detect_file_ext(file_path)
+    if ext in (".xlsx", ".xls"):
+        return pd.read_excel(file_path)
+    # CSV: 尝试多种编码
+    for enc in ("utf-8", "gbk", "gb2312", "latin-1"):
+        try:
+            return pd.read_csv(file_path, encoding=enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return pd.read_csv(file_path, encoding="utf-8", errors="replace")
 
 
 def ensure_session_data_path(session_id: str, source_data_path: Optional[str]) -> Optional[str]:
-    """确保源数据已落入会话资产目录，并返回统一后的资产路径。"""
-    import shutil
+    """确保源数据已落入会话资产目录（统一转为 CSV），并返回统一后的资产路径。"""
+    import pandas as pd
 
-    session_data_path = get_session_original_data_path(session_id)
-    session_data_path.parent.mkdir(parents=True, exist_ok=True)
+    asset_manager = get_asset_manager(session_id=session_id)
+    data_dir = asset_manager.session_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = data_dir / "original_data.csv"
 
+    # 如果已经存在转换好的 CSV，直接返回
     if not source_data_path:
-        if session_data_path.exists():
-            return str(session_data_path)
+        if csv_path.exists():
+            return str(csv_path)
+        # 兼容：查找任意 original_data.* 文件
+        for f in data_dir.glob("original_data.*"):
+            return str(f)
         return None
 
     source_path = Path(source_data_path)
-    if source_path.exists():
-        try:
-            if source_path.resolve() != session_data_path.resolve():
-                shutil.copy2(source_path, session_data_path)
-                print(f"[API] 初始数据已复制到: {session_data_path}")
-        except FileNotFoundError:
-            shutil.copy2(source_path, session_data_path)
-            print(f"[API] 初始数据已复制到: {session_data_path}")
+    if not source_path.exists():
+        if csv_path.exists():
+            return str(csv_path)
+        return source_data_path
 
-    if session_data_path.exists():
-        save_data_onboarding_artifacts(session_id, session_data_path, source_data_path)
-        return str(session_data_path)
+    # 如果已转换过，直接返回
+    if csv_path.exists() and source_path.resolve() != csv_path.resolve():
+        return str(csv_path)
 
-    return source_data_path
+    # 检测源文件格式
+    source_ext = _detect_file_ext(source_path)
+
+    # 保存原始文件（保留原始格式）
+    original_path = data_dir / f"original_data{source_ext}"
+    if source_path.resolve() != original_path.resolve():
+        import shutil
+        shutil.copy2(source_path, original_path)
+        print(f"[API] 原始文件已复制到: {original_path}")
+
+    # 读取数据并统一保存为 CSV（供后续流程使用）
+    try:
+        df = _read_data_file(original_path)
+        df.to_csv(csv_path, index=False, encoding="utf-8")
+        print(f"[API] 数据已转换并保存为 CSV: {csv_path} ({len(df)} 行 × {len(df.columns)} 列)")
+    except Exception as e:
+        print(f"[API] 数据转换为 CSV 失败: {e}")
+        # 回退：如果无法转换，直接使用原始文件
+        if original_path.exists():
+            save_data_onboarding_artifacts(session_id, original_path, source_data_path)
+            return str(original_path)
+        return source_data_path
+
+    save_data_onboarding_artifacts(session_id, csv_path, source_data_path)
+    return str(csv_path)
 
 
 def save_data_onboarding_artifacts(
@@ -94,7 +149,7 @@ def save_data_onboarding_artifacts(
 
     # ---- Schema 快照 ----
     try:
-        df_full = pd.read_csv(session_data_path)
+        df_full = _read_data_file(session_data_path)
         schema_snapshot = {
             "session_id": session_id,
             "snapshot_timestamp": datetime.now().isoformat(),

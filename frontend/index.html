@@ -256,7 +256,7 @@
                     <label :class="['btn', uploadState.status === 'success' ? 'btn-success' : 'btn-outline', 'btn-block']" style="cursor:pointer;margin-bottom:6px">
                         <i :class="uploadState.uploading ? 'fas fa-spinner fa-spin' : uploadState.status === 'success' ? 'fas fa-check-circle' : 'fas fa-cloud-upload-alt'"></i>
                         {{ uploadState.uploading ? '上传中...' : uploadState.filename ? uploadState.filename : '选择文件上传' }}
-                        <input type="file" accept=".csv,.xlsx,.xls,.parquet,.tsv" @change="handleFileUpload" style="display:none" :disabled="uploadState.uploading">
+                        <input type="file" accept=".csv,.xlsx,.xls,.parquet,.tsv" multiple @change="handleFileUpload" style="display:none" :disabled="uploadState.uploading">
                     </label>
                     <div v-if="uploadState.status === 'success'" style="font-size:11px;color:var(--success);margin-bottom:4px">
                         <i class="fas fa-check"></i> {{ formatFileSize(uploadState.fileSize) }} 已上传
@@ -279,6 +279,14 @@
                 <select v-model="config.taskType">
                     <option value="classification">分类</option>
                     <option value="regression">回归</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>运行模式</label>
+                <select v-model="config.workflowMode">
+                    <option value="full">完整流程</option>
+                    <option value="feature_only">仅特征工程</option>
+                    <option value="schema_only">仅Schema（无数据）</option>
                 </select>
             </div>
             <div class="form-group">
@@ -332,7 +340,7 @@
             <template v-if="activeTab === 'workflow'">
 
                 <!-- Stage 1: Data Upload -->
-                <div v-if="currentStageIndex === 0" class="card">
+                <div v-if="currentStageKey === 'data_upload'" class="card">
                     <div class="card-header"><div class="card-title"><i class="fas fa-upload"></i> 数据上传</div></div>
                     <p style="color:var(--text-secondary)">请在左侧配置工作流参数，然后点击「启动工作流」按钮。启动后将自动开始问题定义阶段。</p>
                     <div v-if="stageResults.data_upload" class="pred-result" style="margin-top:16px">
@@ -342,7 +350,7 @@
                 </div>
 
                 <!-- Stage 2: Problem Definition -->
-                <div v-if="currentStageIndex === 1" class="card">
+                <div v-if="currentStageKey === 'problem_definition'" class="card">
                     <div class="card-header">
                         <div class="card-title"><i class="fas fa-bullseye"></i> 问题定义</div>
                         <button class="btn btn-primary btn-sm" @click="runStage('problem_definition')" :disabled="loading.stage" v-if="!stageData.problem_definition">
@@ -368,8 +376,34 @@
                     </template>
                 </div>
 
+                <!-- Stage: Data Aggregation -->
+                <div v-if="currentStageKey === 'data_aggregation'" class="card">
+                    <div class="card-header">
+                        <div class="card-title"><i class="fas fa-layer-group"></i> 数据聚合</div>
+                        <button class="btn btn-primary btn-sm" @click="runStage('data_aggregation')" :disabled="loading.stage" v-if="!stageData.data_aggregation">
+                            <i class="fas fa-play"></i> 生成聚合方案
+                        </button>
+                    </div>
+                    <div v-if="stageData.data_aggregation && stageData.data_aggregation.skipped" class="loading-box" style="background:#f0fdf4;color:#166534">
+                        <i class="fas fa-check-circle"></i> 已跳过（单表输入，无需聚合）
+                    </div>
+                    <div v-else-if="runningStage === 'data_aggregation' && revising.data_aggregation" class="loading-box"><div class="spinner"></div>正在根据修改意见修订聚合方案...</div>
+                    <div v-else-if="runningStage === 'data_aggregation'" class="loading-box"><div class="spinner"></div>正在分析多表关系并生成聚合方案...</div>
+                    <template v-else-if="stageData.data_aggregation && !stageData.data_aggregation.skipped">
+                        <div v-if="stageData.data_aggregation.proposal" class="md-content" v-html="renderMd(stageData.data_aggregation.proposal)"></div>
+                        <div v-if="stageStreaming.data_aggregation && stageStreamContent" class="stream-box"><pre class="stream-pre">{{ stageStreamContent }}</pre></div>
+                        <div v-if="stageData.data_aggregation.requires_confirmation && stageStatus.data_aggregation !== 'completed'" class="confirm-bar">
+                            <span class="label"><i class="fas fa-hand-point-right"></i> 请确认聚合方案</span>
+                            <button class="btn btn-success btn-sm" @click="submitConfirm('confirmed')"><i class="fas fa-check"></i> 确认执行</button>
+                            <button class="btn btn-warning btn-sm" @click="showRevision = true"><i class="fas fa-edit"></i> 修改</button>
+                            <button class="btn btn-secondary btn-sm" @click="submitConfirm('skipped')"><i class="fas fa-forward"></i> 跳过</button>
+                        </div>
+                        <revision-panel v-if="showRevision && stageStatus.data_aggregation !== 'completed'" :aspects="currentModifiableAspects" :round="revisionRound" @submit="submitRevisionText" @cancel="showRevision = false"></revision-panel>
+                    </template>
+                </div>
+
                 <!-- Stage 3: Data Contract Check -->
-                <div v-if="currentStageIndex === 2" class="card">
+                <div v-if="currentStageKey === 'data_contract_check'" class="card">
                     <div class="card-header">
                         <div class="card-title"><i class="fas fa-file-contract"></i> 数据契约检查</div>
                         <button class="btn btn-primary btn-sm" @click="runStage('data_contract_check')" :disabled="loading.stage" v-if="!stageData.data_contract_check">
@@ -397,7 +431,7 @@
                 </div>
 
                 <!-- Stage 4: Data Splitting -->
-                <div v-if="currentStageIndex === 3" class="card">
+                <div v-if="currentStageKey === 'data_splitting'" class="card">
                     <div class="card-header">
                         <div class="card-title"><i class="fas fa-columns"></i> 数据拆分</div>
                         <button class="btn btn-primary btn-sm" @click="runStage('data_splitting')" :disabled="loading.stage" v-if="!stageData.data_splitting">
@@ -430,7 +464,7 @@
                 </div>
 
                 <!-- Stage 5: Data Cleaning -->
-                <div v-if="currentStageIndex === 4" class="card">
+                <div v-if="currentStageKey === 'data_cleaning'" class="card">
                     <div class="card-header">
                         <div class="card-title"><i class="fas fa-broom"></i> 数据清洗</div>
                         <button class="btn btn-primary btn-sm" @click="runStage('data_cleaning')" :disabled="loading.stage" v-if="!stageData.data_cleaning">
@@ -490,7 +524,7 @@
                 </div>
 
                 <!-- Stage 6: Data Exploration -->
-                <div v-if="currentStageIndex === 5" class="card">
+                <div v-if="currentStageKey === 'data_exploration'" class="card">
                     <div class="card-header">
                         <div class="card-title"><i class="fas fa-chart-bar"></i> 数据探索</div>
                         <button class="btn btn-primary btn-sm" @click="runStage('data_exploration')" :disabled="loading.stage" v-if="!stageData.data_exploration">
@@ -504,7 +538,7 @@
                 </div>
 
                 <!-- Stage 7: Feature Engineering -->
-                <div v-if="currentStageIndex === 6" class="card">
+                <div v-if="currentStageKey === 'feature_engineering'" class="card">
                     <div class="card-header">
                         <div class="card-title"><i class="fas fa-magic"></i> 特征工程</div>
                         <button class="btn btn-primary btn-sm" @click="runStage('feature_engineering')" :disabled="loading.stage" v-if="!stageData.feature_engineering">
@@ -584,7 +618,7 @@
                 </div>
 
                 <!-- Stage 8: Model Training -->
-                <div v-if="currentStageIndex === 7" class="card">
+                <div v-if="currentStageKey === 'model_training'" class="card">
                     <div class="card-header">
                         <div class="card-title"><i class="fas fa-brain"></i> 模型训练</div>
                         <button class="btn btn-primary btn-sm" @click="runStage('model_training')" :disabled="loading.stage" v-if="!stageData.model_training">
@@ -934,18 +968,33 @@ const app = createApp({
         ];
         const activeTab = ref('workflow');
 
-        // -- Stages --
-        const stages = [
-            { key: 'data_upload', label: '数据上传', desc: '上传并配置数据' },
-            { key: 'problem_definition', label: '问题定义', desc: '分析数据定义建模目标' },
-            { key: 'data_contract_check', label: '数据契约检查', desc: '校验数据可建模性' },
-            { key: 'data_splitting', label: '数据拆分', desc: '划分训练/验证/测试集' },
-            { key: 'data_cleaning', label: '数据清洗', desc: '清洗数据质量问题' },
-            { key: 'data_exploration', label: '数据探索', desc: '统计分析与可视化' },
-            { key: 'feature_engineering', label: '特征工程', desc: '特征变换与选择' },
-            { key: 'model_training', label: '模型训练', desc: '模型选择与训练' },
-        ];
+        // -- Stages (dynamic based on workflowMode) --
+        const stagesByMode = {
+            full: [
+                { key: 'data_upload', label: '数据上传', desc: '上传并配置数据' },
+                { key: 'problem_definition', label: '问题定义', desc: '分析数据定义建模目标' },
+                { key: 'data_aggregation', label: '数据聚合', desc: '多表关联聚合为建模宽表' },
+                { key: 'data_contract_check', label: '数据契约检查', desc: '校验数据可建模性' },
+                { key: 'data_splitting', label: '数据拆分', desc: '划分训练/验证/测试集' },
+                { key: 'data_cleaning', label: '数据清洗', desc: '清洗数据质量问题' },
+                { key: 'data_exploration', label: '数据探索', desc: '统计分析与可视化' },
+                { key: 'feature_engineering', label: '特征工程', desc: '特征变换与选择' },
+                { key: 'model_training', label: '模型训练', desc: '模型选择与训练' },
+            ],
+            schema_only: [
+                { key: 'data_upload', label: 'Schema上传', desc: '上传数据字典或表结构' },
+                { key: 'problem_definition', label: '问题定义', desc: '分析数据结构与建模目标' },
+                { key: 'feature_engineering', label: '特征工程', desc: '生成特征方案与代码模板' },
+            ],
+            feature_only: [
+                { key: 'data_upload', label: '数据上传', desc: '上传数据文件' },
+                { key: 'data_exploration', label: '数据探索', desc: '统计分析与可视化' },
+                { key: 'feature_engineering', label: '特征工程', desc: '特征构造与评估' },
+            ],
+        };
+        const stages = computed(() => stagesByMode[config.workflowMode] || stagesByMode.full);
         const currentStageIndex = ref(0);
+        const currentStageKey = computed(() => stages.value[currentStageIndex.value]?.key || '');
         const stageStatus = reactive({});
         const stageData = reactive({});
         const stageResults = reactive({});
@@ -956,8 +1005,11 @@ const app = createApp({
             dataPath: '',
             targetColumn: '',
             taskType: 'classification',
-            model: 'claude-opus-4-6',
+            workflowMode: 'full',
+            model: 'qwen3.6-plus',
             taskDescription: '',
+            extraDataPaths: [],
+            isMultiTable: false,
         });
 
         // -- Loading --
@@ -976,7 +1028,7 @@ const app = createApp({
         // -- Stage Streaming (SSE) --
         const stageStreamContent = ref('');
         const stageStreaming = reactive({});
-        const STREAMABLE_STAGES = ['data_cleaning', 'feature_engineering', 'model_training'];
+        const STREAMABLE_STAGES = ['data_aggregation', 'data_cleaning', 'feature_engineering', 'model_training'];
 
         // -- Confirm execution streaming --
         const confirmStreaming = reactive({});
@@ -1080,46 +1132,81 @@ const app = createApp({
 
         // ========== File Upload ==========
         const handleFileUpload = async (event) => {
-            const file = event.target.files[0];
-            if (!file) return;
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
             uploadState.uploading = true;
             uploadState.status = '';
             uploadState.error = '';
-            uploadState.filename = file.name;
-            try {
-                const formData = new FormData();
-                formData.append('file', file);
-                const res = await fetch(`${API}/upload?session_id=${encodeURIComponent(sessionId.value)}`, { method: 'POST', body: formData });
-                const data = await res.json();
-                if (data.success) {
-                    uploadState.status = 'success';
-                    uploadState.fileSize = data.file_size;
-                    toast('文件上传成功: ' + data.filename, 'success');
-                } else {
+
+            if (files.length === 1) {
+                // 单文件上传（原逻辑）
+                const file = files[0];
+                uploadState.filename = file.name;
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    const res = await fetch(`${API}/upload?session_id=${encodeURIComponent(sessionId.value)}`, { method: 'POST', body: formData });
+                    const data = await res.json();
+                    if (data.success) {
+                        uploadState.status = 'success';
+                        uploadState.fileSize = data.file_size;
+                        toast('文件上传成功: ' + data.filename, 'success');
+                    } else {
+                        uploadState.status = 'error';
+                        uploadState.error = data.error || data.detail || '上传失败';
+                    }
+                } catch (e) {
                     uploadState.status = 'error';
-                    uploadState.error = data.error || data.detail || '上传失败';
+                    uploadState.error = e.message;
                 }
-            } catch (e) {
-                uploadState.status = 'error';
-                uploadState.error = e.message;
+            } else {
+                // 多文件上传（多表聚合场景）
+                uploadState.filename = `${files.length} 个文件`;
+                try {
+                    const formData = new FormData();
+                    for (let i = 0; i < files.length; i++) {
+                        formData.append('files', files[i]);
+                    }
+                    const res = await fetch(`${API}/upload/multi?session_id=${encodeURIComponent(sessionId.value)}`, { method: 'POST', body: formData });
+                    const data = await res.json();
+                    if (data.success) {
+                        uploadState.status = 'success';
+                        uploadState.filename = data.file_names.join(', ');
+                        config.extraDataPaths = data.extra_paths || [];
+                        config.isMultiTable = data.is_multi_table || false;
+                        toast(`${data.file_names.length} 个文件上传成功`, 'success');
+                    } else {
+                        uploadState.status = 'error';
+                        uploadState.error = data.error || data.detail || '上传失败';
+                    }
+                } catch (e) {
+                    uploadState.status = 'error';
+                    uploadState.error = e.message;
+                }
             }
             uploadState.uploading = false;
         };
 
         // ========== Workflow ==========
         const startWorkflow = async () => {
-            if (!uploadState.status && !config.dataPath) { toast('请先上传数据文件或输入数据路径', 'error'); return; }
-            if (!config.targetColumn) { toast('请填写目标列名', 'error'); return; }
+            if (config.workflowMode !== 'schema_only') {
+                if (!uploadState.status && !config.dataPath) { toast('请先上传数据文件或输入数据路径', 'error'); return; }
+            }
+            if (config.workflowMode !== 'schema_only' && !config.targetColumn) { toast('请填写目标列名', 'error'); return; }
             loading.start = true;
             try {
                 const body = {
                     session_id: sessionId.value,
                     target_column: config.targetColumn,
                     task_type: config.taskType,
+                    workflow_mode: config.workflowMode,
                     model: config.model,
                     task_description: config.taskDescription,
                 };
                 if (config.dataPath) body.data_path = config.dataPath;
+                if (config.extraDataPaths && config.extraDataPaths.length > 0) {
+                    body.extra_data_paths = config.extraDataPaths;
+                }
                 const data = await apiPost('/workflow/start', body);
                 if (data.success) {
                     stageStatus['data_upload'] = 'completed';
@@ -1191,6 +1278,18 @@ const app = createApp({
                 const data = await apiPost(`/workflow/${sessionId.value}/stage/${stage}/run`);
                 if (data.success) {
                     stageData[stage] = data;
+                    // 自动跳过的阶段（如单表输入时的 data_aggregation）
+                    if (data.skipped) {
+                        stageStatus[stage] = 'completed';
+                        stageData[stage] = { skipped: true, reason: data.reason || '已跳过' };
+                        loading.stage = false; runningStage.value = '';
+                        // 自动 advance 到下一阶段
+                        if (currentStageIndex.value < stages.value.length - 1) {
+                            currentStageIndex.value++;
+                            runStage(stages.value[currentStageIndex.value].key);
+                        }
+                        return;
+                    }
                     currentConfirmationId.value = data.confirmation_id || '';
                     currentModifiableAspects.value = data.modifiable_aspects || [];
                     revisionRound.value = 0;
@@ -1207,10 +1306,14 @@ const app = createApp({
         };
 
         const submitConfirm = async (status) => {
-            const stage = stages[currentStageIndex.value].key;
+            const stage = stages.value[currentStageIndex.value].key;
+            if (loading.stage) return; // 防止重复提交
 
-            // 对于确认执行的流式阶段，使用 SSE
-            if (status === 'confirmed' && STREAMABLE_STAGES.includes(stage)) {
+            // 对于确认执行的流式阶段，使用 SSE（schema_only 模式不走流式）
+            const useStream = status === 'confirmed'
+                && STREAMABLE_STAGES.includes(stage)
+                && config.workflowMode !== 'schema_only';
+            if (useStream) {
                 loading.stage = true;
                 runningStage.value = stage;
                 confirmExecuting[stage] = true;
@@ -1242,7 +1345,7 @@ const app = createApp({
                                 }
                                 showRevision.value = false;
                                 toast('已确认执行', 'success');
-                                if (currentStageIndex.value < stages.length - 1) {
+                                if (currentStageIndex.value < stages.value.length - 1) {
                                     currentStageIndex.value++;
                                 }
                             } else {
@@ -1278,6 +1381,10 @@ const app = createApp({
         };
 
         const submitConfirmFallback = async (status) => {
+            const stage = stages.value[currentStageIndex.value].key;
+            if (loading.stage) return; // 防止重复提交
+            loading.stage = true;
+            runningStage.value = stage;
             try {
                 const data = await apiPost('/confirmation/submit', {
                     session_id: sessionId.value,
@@ -1286,7 +1393,6 @@ const app = createApp({
                     modifications: null,
                 });
                 if (data.success) {
-                    const stage = stages[currentStageIndex.value].key;
                     stageStatus[stage] = 'completed';
                     showRevision.value = false;
                     // 提取生成的代码
@@ -1314,13 +1420,13 @@ const app = createApp({
                             // Don't advance — stay on feature engineering page
                         } else {
                             toast('有后续确认: ' + (data.next_confirmation.stage || ''), 'info');
-                            if (currentStageIndex.value < stages.length - 1) {
+                            if (currentStageIndex.value < stages.value.length - 1) {
                                 currentStageIndex.value++;
                             }
                         }
                     } else {
                         // Auto advance to next stage
-                        if (currentStageIndex.value < stages.length - 1) {
+                        if (currentStageIndex.value < stages.value.length - 1) {
                             currentStageIndex.value++;
                         }
                     }
@@ -1328,7 +1434,7 @@ const app = createApp({
                     toast(data.error || data.detail || '提交失败', 'error');
                 }
             } catch (e) { toast('请求失败: ' + e.message, 'error'); }
-            const stageKey = stages[currentStageIndex.value].key;
+            const stageKey = stages.value[currentStageIndex.value].key;
             confirmExecuting[stageKey] = false;
             loading.stage = false; runningStage.value = '';
         };
@@ -1368,7 +1474,7 @@ const app = createApp({
                         toast(data.error || '特征评估执行失败', 'error');
                     }
                     // Advance to next stage
-                    if (currentStageIndex.value < stages.length - 1) {
+                    if (currentStageIndex.value < stages.value.length - 1) {
                         currentStageIndex.value++;
                     }
                 } else {
@@ -1379,7 +1485,7 @@ const app = createApp({
         };
 
         const submitRevisionText = async (text) => {
-            const stage = stages[currentStageIndex.value].key;
+            const stage = stages.value[currentStageIndex.value].key;
             loading.stage = true;
             runningStage.value = stage;
             revising[stage] = true;
@@ -1478,7 +1584,8 @@ const app = createApp({
                 if (data.context) {
                     config.targetColumn = data.context.target_column || '';
                     config.taskType = data.context.task_type || 'classification';
-                    config.model = data.context.model || 'claude-opus-4-6';
+                    config.workflowMode = data.context.workflow_mode || 'full';
+                    config.model = data.context.model || 'qwen3.6-plus';
                     config.dataPath = data.context.data_path || '';
                     config.taskDescription = data.context.task_description || '';
                 }
@@ -1635,7 +1742,7 @@ const app = createApp({
 
         return {
             API, tabs, activeTab,
-            stages, currentStageIndex, stageStatus, stageData, stageResults,
+            stages, currentStageIndex, currentStageKey, stageStatus, stageData, stageResults,
             sessionId, config, loading, runningStage, uploadState,
             currentConfirmationId, currentModifiableAspects, showRevision, revisionRound,
             stageStreamContent, stageStreaming,

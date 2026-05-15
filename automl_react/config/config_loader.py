@@ -70,8 +70,7 @@ class ConfigLoader:
         Returns:
             Prompt 配置字典
         """
-        if not self._prompts or reload:
-            self._prompts = self._load_yaml("prompts.yaml")
+        self._prompts = self._load_yaml("prompts.yaml")
         return self._prompts
 
     def load_llm_config(self, reload: bool = False) -> Dict[str, Any]:

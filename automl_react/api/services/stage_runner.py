@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 from automl_react.agents import (
+    DataAggregationAgent,
     DataCleaningAgent,
     DataExplorationAgent,
     DataSplittingAgent,
@@ -31,6 +32,7 @@ from ..helpers import (
     ensure_agent,
 )
 from .llm_factory import create_llm_client
+from automl_react.workflow.workflow_state import WorkflowMode
 
 
 def run_problem_definition(
@@ -55,6 +57,7 @@ def run_problem_definition(
             target_column=workflow_state.get_context("target_column"),
             task_type=workflow_state.get_context("task_type"),
             task_description=task_description,
+            workflow_mode=workflow_state.get_context("workflow_mode", "full"),
         )
         definition_payload = agent.get_problem_definition_payload()
 
@@ -389,27 +392,49 @@ def run_feature_engineering(
             print(f"[API] 用户建模背景: {task_description[:100]}...")
 
         asset_manager = get_asset_manager(session_id=session_id)
-        exploration_result = asset_manager.read_asset("exploration", "data_exploration_result.md")
-        cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
-        cleaned_data_path = None
-        if cleaning_result_json:
-            try:
-                cleaning_data = json.loads(cleaning_result_json)
-                cleaned_data_path = cleaning_data.get("cleaned_data_path")
-                if cleaned_data_path:
-                    print(f"[API] 使用清洗后的数据: {cleaned_data_path}")
-            except Exception:
-                pass
 
-        result = agent.generate_feature_plan(
-            get_train_raw_data_path(workflow_state) or data_path,
-            target_column,
-            task_type,
-            analysis_result=exploration_result,
-            cleaned_data_path=cleaned_data_path,
-            task_description=task_description
-        )
-        print(f"[API] 特征工程方案生成完成，长度: {len(result)} 字符")
+        # 根据 workflow_mode 分发
+        mode = workflow_state.get_context("workflow_mode", WorkflowMode.FULL)
+
+        if mode == WorkflowMode.SCHEMA_ONLY:
+            # Schema-only 模式：基于 schema 生成方案（不执行）
+            from automl_react.utils.schema_parser import parse_schema, schema_to_text
+
+            schema_file_path = workflow_state.get_context("schema_file_path")
+            schema_text_input = task_description if not schema_file_path else None
+
+            schema_info = parse_schema(file_path=schema_file_path, text=schema_text_input)
+
+            result = agent.generate_feature_plan_from_schema(
+                schema_info=schema_info,
+                target_column=target_column,
+                task_type=task_type,
+                task_description=task_description,
+            )
+            print(f"[API] Schema-only 特征工程方案生成完成，长度: {len(result)} 字符")
+        else:
+            # full / feature_only 模式：基于实际数据生成方案
+            exploration_result = asset_manager.read_asset("exploration", "data_exploration_result.md")
+            cleaning_result_json = asset_manager.read_asset("cleaning", "cleaning_result.json")
+            cleaned_data_path = None
+            if cleaning_result_json:
+                try:
+                    cleaning_data = json.loads(cleaning_result_json)
+                    cleaned_data_path = cleaning_data.get("cleaned_data_path")
+                    if cleaned_data_path:
+                        print(f"[API] 使用清洗后的数据: {cleaned_data_path}")
+                except Exception:
+                    pass
+
+            result = agent.generate_feature_plan(
+                get_train_raw_data_path(workflow_state) or data_path,
+                target_column,
+                task_type,
+                analysis_result=exploration_result,
+                cleaned_data_path=cleaned_data_path,
+                task_description=task_description
+            )
+            print(f"[API] 特征工程方案生成完成，长度: {len(result)} 字符")
 
         asset_manager.save_data(
             data=result,
@@ -417,9 +442,8 @@ def run_feature_engineering(
             asset_type="features",
             metadata={
                 "stage": "feature_engineering",
-                "data_path": cleaned_data_path or get_train_raw_data_path(workflow_state) or data_path,
-                "has_exploration_input": exploration_result is not None,
-                "has_cleaned_data_input": cleaned_data_path is not None,
+                "workflow_mode": mode,
+                "data_path": data_path if mode != WorkflowMode.SCHEMA_ONLY else workflow_state.get_context("schema_file_path"),
                 "timestamp": datetime.now().isoformat()
             }
         )
@@ -450,6 +474,8 @@ def run_feature_engineering(
             "skills_referenced": [{"name": s.skill_name, "files": [s.reference_file]} for s in skills_referenced],
         }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
 
 
@@ -566,3 +592,80 @@ def run_model_training(
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def run_data_aggregation(
+    session: Dict,
+    workflow_state,
+    confirmation_manager,
+    data_path: str,
+    session_id: str,
+) -> Dict[str, Any]:
+    """数据聚合阶段：分析多表关系并生成聚合方案。"""
+    is_multi_table = workflow_state.get_context("is_multi_table", False)
+    extra_data_paths = workflow_state.get_context("extra_data_paths", [])
+
+    if not is_multi_table or not extra_data_paths:
+        print(f"[API] 单表输入，跳过数据聚合阶段")
+        return {
+            "success": True,
+            "stage": "data_aggregation",
+            "skipped": True,
+            "reason": "单表输入，无需聚合",
+            "requires_confirmation": False,
+        }
+
+    try:
+        print(f"[API] ========== 数据聚合阶段开始 ==========")
+        model = workflow_state.get_context("model", "kimi-k2.5")
+        llm = create_llm_client(model)
+        agent = ensure_agent(session, "aggregation", DataAggregationAgent, llm=llm, session_id=session_id)
+
+        all_data_paths = [data_path] + extra_data_paths
+        target_column = workflow_state.get_context("target_column", "")
+        task_type = workflow_state.get_context("task_type", "classification")
+        task_description = workflow_state.get_context("task_description", "")
+
+        result = agent.generate_aggregation_plan(
+            data_paths=all_data_paths,
+            target_column=target_column,
+            task_type=task_type,
+            task_description=task_description,
+        )
+        print(f"[API] 聚合方案生成完成，长度: {len(result)} 字符")
+
+        asset_manager = get_asset_manager(session_id=session_id)
+        asset_manager.save_data(
+            data=result,
+            filename="aggregation_plan.md",
+            asset_type="aggregation",
+            metadata={
+                "stage": "data_aggregation",
+                "data_paths": all_data_paths,
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+        print(f"[API] 聚合方案已保存到: aggregation/aggregation_plan.md")
+
+        confirmation_point = confirmation_manager.add_confirmation_point(
+            stage="data_aggregation",
+            proposal_content=result,
+            metadata={
+                "stage": "data_aggregation",
+                "data_paths": all_data_paths,
+                "target_column": target_column,
+            },
+        )
+        confirmation_point.modifiable_aspects = agent.get_modifiable_aspects()
+
+        print(f"[API] ========== 数据聚合阶段完成 ==========")
+        return {
+            "success": True,
+            "stage": "data_aggregation",
+            "proposal": result,
+            "requires_confirmation": True,
+            "confirmation_id": confirmation_point.id,
+            "modifiable_aspects": confirmation_point.modifiable_aspects,
+        }
+    except Exception as e:
+        return {"success": False, "error": f"{e}\n{traceback.format_exc()}"}
